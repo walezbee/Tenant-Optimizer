@@ -1,0 +1,30 @@
+name: Tenant Optimizer CI/CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+      - name: Deploy Bicep
+        run: |
+          az deployment sub create --location eastus --template-file infra/main.bicep --parameters @infra/main.parameters.json
+      - name: Deploy Backend/Frontend
+        run: |
+          az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend

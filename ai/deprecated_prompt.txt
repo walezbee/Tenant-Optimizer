@@ -1,0 +1,1 @@
+Given a list of Azure resources, use Azure's latest documentation to spot those that are deprecated or outdated. For each, recommend a modern replacement or upgrade path.
