@@ -1,4 +1,4 @@
-# Tenant Optimizer
+## Tenant Optimizer
 
 **Tenant Optimizer** is a multi-tenant SaaS app powered by Azure OpenAI, designed to optimize Azure resources by detecting, deleting, and upgrading orphaned/deprecated resources.
 
