@@ -24,7 +24,7 @@ jobs:
           npm run build
       - name: Deploy Bicep
         run: |
-          az deployment sub create --location eastus --template-file infra/main.bicep --parameters @infra/main.parameters.json
+          az deployment group create --location uksouth --template-file infra/main.bicep --parameters @infra/main.parameters.json
       - name: Deploy Backend/Frontend
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend
