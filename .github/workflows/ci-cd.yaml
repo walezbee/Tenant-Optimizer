@@ -9,22 +9,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install backend dependencies
         run: |
           cd backend
           pip install -r requirements.txt
+
       - name: Build frontend
         run: |
           cd frontend
           npm install
           npm run build
+
       - name: Deploy Bicep
         run: |
           az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
+
       - name: Deploy Backend/Frontend
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend
