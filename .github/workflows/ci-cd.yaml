@@ -13,7 +13,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }} # Make sure 'AZURE_CREDENTIALS' is set in your repository secrets, or replace with the correct secret name (e.g., 'AZURE_CLIENT_SECRET').
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,6 +35,11 @@ jobs:
         run: |
           az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
 
-      - name: Deploy Backend/Frontend
+      - name: Zip backend for deployment
         run: |
-          az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend
+          cd backend
+          zip -r ../backend.zip .
+
+      - name: Deploy Backend to Azure Web App
+        run: |
+          az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip
