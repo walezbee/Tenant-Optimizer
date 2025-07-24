@@ -13,7 +13,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }} # Ensure this secret exists in your repo settings
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,20 +35,20 @@ jobs:
         run: |
           az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
 
+      # Copy frontend build into backend/static
+      - name: Copy frontend build to backend static folder
+        run: |
+          rm -rf backend/static
+          mkdir -p backend/static
+          cp -r frontend/dist/* backend/static/
+
+      # Zip backend (with frontend build inside backend/static)
       - name: Zip backend for deployment
         run: |
           cd backend
           zip -r ../backend.zip .
 
-      - name: Deploy Backend to Azure Web App
+      # Deploy backend (including frontend) to Azure Web App
+      - name: Deploy Backend + Frontend to Azure Web App
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip
-
-      - name: Zip frontend for deployment
-        run: |
-          cd frontend/dist
-          zip -r ../../frontend.zip .
-
-      - name: Deploy Frontend to Azure Web App
-        run: |
-          az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path frontend.zip --type zip
