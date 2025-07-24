@@ -4,12 +4,6 @@ param resourceGroupName string
 @description('The Azure region where the resource group is located.')
 param location string
 
-@description('Name of the application.')
-param appName string
-
-@description('Administrator email for the application.')
-param adminEmail string
-
 
 
 module openai 'modules/openai.bicep' = {

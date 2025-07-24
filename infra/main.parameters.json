@@ -1,6 +1,4 @@
 {
   "location": { "value": "northeurope" },
-  "appName": { "value": "tenant-optimizer" },
-  "adminEmail": { "value": "admin@efbees.com" },
   "resourceGroupName": { "value": "tenant-optimizer-rg" }
 }
