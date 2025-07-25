@@ -20,10 +20,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install backend dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
 
       - name: Build frontend
         run: |
@@ -31,24 +31,26 @@ jobs:
           npm install
           npm run build
 
-      - name: Deploy Bicep
-        run: |
-          az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
-
-      # Copy frontend build into backend/static
-      - name: Copy frontend build to backend static folder
+      - name: Copy frontend build to backend/static
         run: |
           rm -rf backend/static
           mkdir -p backend/static
           cp -r frontend/dist/* backend/static/
 
-      # Zip backend (with frontend build inside backend/static)
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Deploy Bicep
+        run: |
+          az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
+
       - name: Zip backend for deployment
         run: |
           cd backend
           zip -r ../backend.zip .
 
-      # Deploy backend (including frontend) to Azure Web App
       - name: Deploy Backend + Frontend to Azure Web App
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip

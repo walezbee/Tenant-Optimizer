@@ -1,5 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import OAuth2AuthorizationCodeBearer
+from fastapi.staticfiles import StaticFiles
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from agents.detect_orphaned import detect_orphaned_resources
 from agents.delete_orphaned import delete_orphaned_resources
 from agents.detect_deprecated import detect_deprecated_resources
@@ -9,6 +14,13 @@ app = FastAPI()
 oauth2_scheme = OAuth2AuthorizationCodeBearer(
     authorizationUrl="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
+)
+
+# Mount static files (your frontend build) at the root
+app.mount(
+    "/", 
+    StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True),
+    name="static"
 )
 
 @app.get("/scan/orphaned")
