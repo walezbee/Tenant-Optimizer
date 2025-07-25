@@ -64,7 +64,11 @@ jobs:
               AZURE_CLIENT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-ID/1d4b42be349340f1853e55a2e8c5a7d5)" \
               AZURE_CLIENT_SECRET="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-SECRET/01423d2be6ba442e930030514388480a)" \
               AZURE_TENANT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-TENANT-ID/be90843f165b4ec0a2960275359a6e13)"
-
+        
+      - name: Wait for App Service restart
+        run: sleep 60
+        
+          az webapp restart --resource-group tenant-optimizer-rg --name tenant-optimizer-web        
       - name: Deploy Backend + Frontend to Azure Web App
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip
