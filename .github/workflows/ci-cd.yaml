@@ -46,13 +46,11 @@ jobs:
         run: |
           az deployment group create --resource-group tenant-optimizer-rg --template-file infra/main.bicep --parameters @infra/main.parameters.json
 
-      ## This is the CRUCIAL step: zip FROM WITHIN backend/
       - name: Zip backend for deployment
         run: |
           cd backend
           zip -r ../backend.zip .
 
-      # Set App Service environment variables with Key Vault references (add your secret versions before deploying)
       - name: Set Azure App Settings (Key Vault references)
         run: |
           az webapp config appsettings set \
@@ -64,11 +62,21 @@ jobs:
               AZURE_CLIENT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-ID/1d4b42be349340f1853e55a2e8c5a7d5)" \
               AZURE_CLIENT_SECRET="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-SECRET/01423d2be6ba442e930030514388480a)" \
               AZURE_TENANT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-TENANT-ID/be90843f165b4ec0a2960275359a6e13)"
-        
+
       - name: Wait for App Service restart
-        run: sleep 60
-        
-          az webapp restart --resource-group tenant-optimizer-rg --name tenant-optimizer-web        
+        run: |
+          sleep 60
+          az webapp restart --resource-group tenant-optimizer-rg --name tenant-optimizer-web
+
       - name: Deploy Backend + Frontend to Azure Web App
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip
+
+      - name: Workaround - Run pip install in Kudu after deploy
+        env:
+          KUDU_USER: ${{ secrets.AZURE_DEPLOY_USER }}
+          KUDU_PASS: ${{ secrets.AZURE_DEPLOY_PASS }}
+        run: |
+          curl -X POST -u "$KUDU_USER:$KUDU_PASS" "https://tenant-optimizer-web.scm.azurewebsites.net/api/command" \
+          -H "Content-Type: application/json" \
+          -d '{"command": "pip install -r /home/site/wwwroot/requirements.txt"}'
