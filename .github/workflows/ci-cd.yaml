@@ -52,6 +52,19 @@ jobs:
           cd backend
           zip -r ../backend.zip .
 
+      # Set App Service environment variables with Key Vault references (add your secret versions before deploying)
+      - name: Set Azure App Settings (Key Vault references)
+        run: |
+          az webapp config appsettings set \
+            --resource-group tenant-optimizer-rg \
+            --name tenant-optimizer-web \
+            --settings \
+              OPENAI_KEY="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/OPENAI-KEY/2b8ec4122c464727ab6e1ef90fe535cb)" \
+              COSMOS_DB_CONNECTION_STRING="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/COSMOS-DB-CONNECTION-STRING/916edc421c9a4e9c96c8f48dd60cafde)" \
+              AZURE_CLIENT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-ID/1d4b42be349340f1853e55a2e8c5a7d5)" \
+              AZURE_CLIENT_SECRET="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-CLIENT-SECRET/01423d2be6ba442e930030514388480a)" \
+              AZURE_TENANT_ID="@Microsoft.KeyVault(SecretUri=https://tenant-optimizer-kv.vault.azure.net/secrets/AZURE-TENANT-ID/be90843f165b4ec0a2960275359a6e13)"
+
       - name: Deploy Backend + Frontend to Azure Web App
         run: |
           az webapp deploy --resource-group tenant-optimizer-rg --name tenant-optimizer-web --src-path backend.zip --type zip
