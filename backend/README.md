@@ -1,4 +1,4 @@
-# Backend (FastAPI) — Tenant Optimizer
+## Backend (FastAPI) — Tenant Optimizer
 
 ## Overview
 This backend is a FastAPI app exposing endpoints to:
