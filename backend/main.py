@@ -23,6 +23,10 @@ app.mount(
     name="static"
 )
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.get("/scan/orphaned")
 async def scan_orphaned(token: str = Depends(oauth2_scheme)):
     return detect_orphaned_resources(token)

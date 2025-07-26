@@ -1,9 +1,10 @@
 #!/bin/bash
 set -e
 
-# Always (re)install requirements
+echo "Startup script: starting at $(date)"
 pip install --upgrade pip
 pip install -r /home/site/wwwroot/requirements.txt
+echo "Startup script: pip install finished at $(date)"
 
-# Start your FastAPI app using Gunicorn & Uvicorn worker
-exec gunicorn main:app -k uvicorn.workers.UvicornWorker --bind=0.0.0.0:8000
+# Use dynamic port for Azure compatibility
+exec gunicorn main:app -k uvicorn.workers.UvicornWorker --bind=0.0.0.0:${PORT:-8000}
