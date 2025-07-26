@@ -1,0 +1,14 @@
+## Wireframe: Tenant Optimizer Main Dashboard
+
+- **Header:** "Tenant Optimizer"
+- **Sidebar:** [Home] [Scan] [Approvals] [Reports]
+- **Main Panel:**
+    - **Scan Section:** Button: "Scan for Orphaned/Deprecated Resources"
+    - **Resource List Table:** Columns: Resource Name | Type | Status | Action (Approve/Delete/Upgrade)
+    - **Approval Inbox:** Pending actions needing approval, Approve/Reject buttons
+    - **Reports:** Savings, Optimization history
+
+## Approval Workflow
+- On detecting orphaned/deprecated resources:
+    - Show in "Approvals" tab
+    - User clicks "Approve" to trigger deletion/upgrade action
