@@ -28,3 +28,35 @@
 - `/docs` — Docs and guides
 
 See `/docs/user-guide.md` for detailed instructions.
+
+## Azure App Service Deployment
+
+### Startup Command Configuration
+
+When deploying the backend to Azure App Service (Python Linux), set the **Startup Command** in the App Service configuration to:
+
+```bash
+/home/site/wwwroot/backend/startup.sh
+```
+
+### Deployment Structure
+
+After deployment, your files should be organized as:
+```
+/home/site/wwwroot/
+├── backend/
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── startup.sh
+│   └── ... (other backend files)
+└── ... (other project files)
+```
+
+### Troubleshooting Deployment Issues
+
+1. **Check Application Logs**: Use Azure Portal > App Service > Log stream to view startup logs
+2. **Verify File Structure**: Ensure `backend/requirements.txt` exists in the deployment
+3. **Environment Variables**: Configure necessary Azure AD and OpenAI environment variables in App Service settings
+4. **Startup Command**: Confirm the startup command points to `/home/site/wwwroot/backend/startup.sh`
+
+The startup script includes comprehensive logging to help debug deployment issues. Check the Application Logs for detailed startup information.
