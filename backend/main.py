@@ -16,15 +16,19 @@ oauth2_scheme = OAuth2AuthorizationCodeBearer(
     tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
 )
 
-# Mount static files (your frontend build) at the root
+# Mount static files at /static (NOT at "/")
 app.mount(
-    "/", 
+    "/static", 
     StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True),
     name="static"
 )
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 def health_check():
+    return {"status": "ok"}
+
+@app.get("/", include_in_schema=False)
+def root_check():
     return {"status": "ok"}
 
 @app.get("/scan/orphaned")
