@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -28,8 +29,9 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/", include_in_schema=False)
-def root_check():
-    return {"status": "ok"}
+def root():
+    """Serve the React app index.html at the root path"""
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
 
 @app.get("/scan/orphaned")
 async def scan_orphaned(token: str = Depends(oauth2_scheme)):
@@ -46,3 +48,21 @@ async def scan_deprecated(token: str = Depends(oauth2_scheme)):
 @app.post("/upgrade/deprecated")
 async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2_scheme)):
     return upgrade_deprecated_resources(token, approval_payload)
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def catch_all(full_path: str):
+    """
+    Catch-all route for React Router SPA support.
+    Serves static files if they exist, otherwise serves index.html for client-side routing.
+    """
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    file_path = os.path.join(static_dir, full_path)
+    
+    # If the requested file exists in static directory, let StaticFiles handle it
+    # This shouldn't happen often since StaticFiles is mounted at /static/
+    # But this is a safety check
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    
+    # For all other routes (like /dashboard, /reports), serve index.html for React Router
+    return FileResponse(os.path.join(static_dir, "index.html"))
