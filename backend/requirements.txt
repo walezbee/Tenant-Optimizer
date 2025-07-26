@@ -6,4 +6,5 @@ python-dotenv
 requests
 azure-identity
 azure-mgmt-resourcegraph
+azure-mgmt-resource
 openai
