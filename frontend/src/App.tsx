@@ -3,13 +3,11 @@ import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
 import { msalConfig } from "./authConfig";
 import "./App.css";
 
-// --- MSAL Setup ---
 const msalInstance = new PublicClientApplication(msalConfig);
 
 const backendApiScope = "api://b0a762fa-2904-4726-b991-871dbfe84f28/user_impersonation";
 const azureArmScope = "https://management.azure.com/.default";
 
-// --- Helper: Fetch with auth token ---
 async function fetchWithAuth(url: string, token: string, options: any = {}) {
   return fetch(url, {
     ...options,
@@ -28,16 +26,26 @@ function App() {
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [msalReady, setMsalReady] = useState(false);
 
-  // Login handler
+  // Initialize MSAL on startup
+  useEffect(() => {
+    msalInstance.initialize()
+      .then(() => setMsalReady(true))
+      .catch((e) => setError("MSAL initialization failed: " + (e.message || e.toString())));
+  }, []);
+
   const handleLogin = async () => {
+    if (!msalReady) {
+      setError("MSAL is not initialized yet. Please wait a moment and try again.");
+      return;
+    }
     try {
       const loginResponse = await msalInstance.loginPopup({
         scopes: [backendApiScope, azureArmScope],
       });
       setAccount(loginResponse.account);
 
-      // Get tokens for both backend API and Azure ARM
       const apiTokenResp = await msalInstance.acquireTokenSilent({
         account: loginResponse.account,
         scopes: [backendApiScope],
@@ -56,7 +64,6 @@ function App() {
     }
   };
 
-  // Fetch subscriptions from backend using ARM token
   const fetchSubscriptions = async () => {
     if (!armToken) return;
     setLoading(true);
@@ -70,7 +77,6 @@ function App() {
         setLoading(false);
         return;
       }
-      // Defensive: Only set if data is an array
       if (Array.isArray(data)) {
         setSubscriptions(data);
       } else {
@@ -84,7 +90,6 @@ function App() {
     setLoading(false);
   };
 
-  // On login, fetch subscriptions
   useEffect(() => {
     if (armToken) {
       fetchSubscriptions();
@@ -104,8 +109,8 @@ function App() {
           The app walks you through reviewing, approving, and fixing these resources; <b>it never deletes or upgrades anything automatically without your explicit approval.</b>
         </p>
         {!account ? (
-          <button onClick={handleLogin} className="login-btn">
-            Sign in with Microsoft
+          <button onClick={handleLogin} className="login-btn" disabled={!msalReady}>
+            {msalReady ? "Sign in with Microsoft" : "Initializing..."}
           </button>
         ) : (
           <div>
