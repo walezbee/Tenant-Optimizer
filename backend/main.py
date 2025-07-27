@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,19 +17,16 @@ oauth2_scheme = OAuth2AuthorizationCodeBearer(
     tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
 )
 
-# Mount static files at /static (NOT at "/")
+# Mount static files at /static
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount(
     "/static", 
-    StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True),
+    StaticFiles(directory=STATIC_DIR, html=True),
     name="static"
 )
 
 @app.get("/health", include_in_schema=False)
 def health_check():
-    return {"status": "ok"}
-
-@app.get("/", include_in_schema=False)
-def root_check():
     return {"status": "ok"}
 
 @app.get("/scan/orphaned")
@@ -46,3 +44,16 @@ async def scan_deprecated(token: str = Depends(oauth2_scheme)):
 @app.post("/upgrade/deprecated")
 async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2_scheme)):
     return upgrade_deprecated_resources(token, approval_payload)
+
+# --- Serve SPA index.html at root ---
+@app.get("/", include_in_schema=False)
+def serve_index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+# --- SPA catch-all for client-side routing ---
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_catch_all(full_path: str, request: Request):
+    file_candidate = os.path.join(STATIC_DIR, full_path)
+    if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
+        return FileResponse(file_candidate)
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
