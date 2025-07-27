@@ -1,6 +1,6 @@
-def upgrade_deprecated_resources(token, approval_payload):
+async def upgrade_deprecated_resources(user_token, approval_payload):
     """
-    Simulates upgrading deprecated resources.
+    Simulates upgrading deprecated resources using the user's token.
     In a real-world scenario, this would trigger ARM/Bicep deployments or migration tools.
     approval_payload: dict with:
       - 'subscription_id': subscription id string

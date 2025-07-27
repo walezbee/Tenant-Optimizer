@@ -6,14 +6,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-import httpx
 
-load_dotenv()
+import httpx
 
 from agents.detect_orphaned import detect_orphaned_resources
 from agents.delete_orphaned import delete_orphaned_resources
 from agents.detect_deprecated import detect_deprecated_resources
 from agents.upgrade_deprecated import upgrade_deprecated_resources
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +51,6 @@ app.mount(
 def health_check():
     return {"status": "ok"}
 
-# New: List subscriptions for the signed-in user
 @app.get("/subscriptions")
 async def list_subscriptions(token: str = Depends(oauth2_scheme)):
     """
@@ -76,15 +76,12 @@ async def list_subscriptions(token: str = Depends(oauth2_scheme)):
 
 @app.post("/scan/orphaned")
 async def scan_orphaned(payload: dict, token: str = Depends(oauth2_scheme)):
-    """
-    Expects: { "subscriptions": [ "subid1", "subid2", ... ] }
-    """
     logger.info("scan_orphaned: called")
     try:
         subscriptions = payload.get("subscriptions")
         if not subscriptions:
             raise HTTPException(status_code=400, detail="subscriptions are required")
-        result = detect_orphaned_resources(token, subscriptions)
+        result = await detect_orphaned_resources(token, subscriptions)
         logger.info(f"scan_orphaned: result: {result}")
         return result
     except Exception as e:
@@ -93,15 +90,12 @@ async def scan_orphaned(payload: dict, token: str = Depends(oauth2_scheme)):
 
 @app.post("/scan/deprecated")
 async def scan_deprecated(payload: dict, token: str = Depends(oauth2_scheme)):
-    """
-    Expects: { "subscriptions": [ "subid1", "subid2", ... ] }
-    """
     logger.info("scan_deprecated: called")
     try:
         subscriptions = payload.get("subscriptions")
         if not subscriptions:
             raise HTTPException(status_code=400, detail="subscriptions are required")
-        result = detect_deprecated_resources(token, subscriptions)
+        result = await detect_deprecated_resources(token, subscriptions)
         logger.info(f"scan_deprecated: result: {result}")
         return result
     except Exception as e:
@@ -113,7 +107,7 @@ async def delete_orphaned(approval_payload: dict, token: str = Depends(oauth2_sc
     logger.info("delete_orphaned: called")
     logger.info(f"delete_orphaned: payload: {approval_payload}")
     try:
-        result = delete_orphaned_resources(token, approval_payload)
+        result = await delete_orphaned_resources(token, approval_payload)
         logger.info(f"delete_orphaned: result: {result}")
         return result
     except Exception as e:
@@ -125,7 +119,7 @@ async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2
     logger.info("upgrade_deprecated: called")
     logger.info(f"upgrade_deprecated: payload: {approval_payload}")
     try:
-        result = upgrade_deprecated_resources(token, approval_payload)
+        result = await upgrade_deprecated_resources(token, approval_payload)
         logger.info(f"upgrade_deprecated: result: {result}")
         return result
     except Exception as e:

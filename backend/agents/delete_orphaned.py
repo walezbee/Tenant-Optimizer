@@ -1,23 +1,26 @@
-from azure.identity import DefaultAzureCredential
-from azure.mgmt.resource import ResourceManagementClient
+import httpx
 
-def delete_orphaned_resources(token, approval_payload):
+async def delete_orphaned_resources(user_token, approval_payload):
     """
-    Deletes the orphaned resources listed in approval_payload.
+    Deletes the orphaned resources listed in approval_payload using the user's token.
     approval_payload: dict with:
       - 'subscription_id': subscription id string
       - 'resources': list of { 'id': resourceId }
     """
-    cred = DefaultAzureCredential()
-    subscription_id = approval_payload.get('subscription_id')
-    if not subscription_id:
-        return {"error": "subscription_id required in approval_payload"}
-    client = ResourceManagementClient(cred, subscription_id)
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Content-Type": "application/json"
+    }
     deleted = []
     for res in approval_payload.get('resources', []):
-        try:
-            client.resources.begin_delete_by_id(res['id'], api_version='2022-09-01')
-            deleted.append(res['id'])
-        except Exception as e:
-            deleted.append({'id': res['id'], 'error': str(e)})
+        resource_id = res['id']
+        # Use the appropriate api-version for your resource type if needed
+        url = f"https://management.azure.com{resource_id}?api-version=2022-09-01"
+        async with httpx.AsyncClient(timeout=30) as client:
+            try:
+                resp = await client.delete(url, headers=headers)
+                resp.raise_for_status()
+                deleted.append(res['id'])
+            except Exception as e:
+                deleted.append({'id': res['id'], 'error': str(e)})
     return {'deleted': deleted}
