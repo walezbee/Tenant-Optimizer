@@ -1,0 +1,24 @@
+.app-container {
+  max-width: 600px;
+  margin: 2em auto;
+  background: #fff;
+  border-radius: 16px;
+  padding: 2em 3em;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+}
+.login-btn {
+  margin: 1em 0;
+  padding: 0.75em 2em;
+  font-size: 1.15em;
+  background: linear-gradient(90deg, #7a5cf0, #3c6cd3);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.login-btn:hover {
+  background: linear-gradient(90deg, #3c6cd3, #7a5cf0);
+}
+.error {
+  color: #b80020;
+}
