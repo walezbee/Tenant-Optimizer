@@ -1,57 +1,48 @@
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.resourcegraph import ResourceGraphClient
-import openai
+from azure.mgmt.resourcegraph.models import QueryRequest
+from openai import OpenAI
 import os
-import json
 
-def detect_deprecated_resources(token):
+def detect_orphaned_resources(token, subscriptions):
     """
-    Detects deprecated or outdated resources in a given Azure subscription.
-    Returns a list of deprecated resources with recommendations.
+    Scans for orphaned managed disks in all provided subscriptions.
+    Args:
+        token: User's access token (not directly used here, but available for future expansion).
+        subscriptions: List of subscription ids (strings) to scan.
+    Returns:
+        OpenAI's classification of orphaned disks, as string or dict.
     """
-    # Collect resources from Azure Resource Graph
     cred = DefaultAzureCredential()
     client = ResourceGraphClient(cred)
 
-    # Query for all resources - you may want to limit fields for efficiency
     query = """
     resources
-    | project id, name, type, kind, sku, location, properties
+    | where type =~ 'microsoft.compute/disks'
+    | where managedBy == ''
+    | project id, name, type, location, managedBy, sku, tags
     """
-    # In production, dynamically determine subscriptions from token/user context
-    subscriptions = [os.getenv("AZURE_SUBSCRIPTION_ID") or "<your-subscription-id>"]
 
-    result = client.resources(query=query, subscriptions=subscriptions)
-    resources = result.data
+    request = QueryRequest(
+        query=query,
+        subscriptions=subscriptions
+    )
+    result = client.resources(request)
+    disks = [dict(row) for row in result.data]
 
-    # Format resources for AI prompt (limit for demo, real-world: batch in chunks)
-    resource_list = [dict(row) for row in resources[:50]]
-
-    # Prepare the prompt for OpenAI
+    openai_client = OpenAI(api_key=os.getenv('OPENAI_KEY'))
     prompt = (
-        "You are an Azure cloud optimization expert. "
-        "Given the following list of Azure resources, identify those that are deprecated or outdated. "
-        "For each deprecated/outdated resource, explain why and recommend the appropriate upgrade or migration path. "
-        "Return your response as a JSON array: [{id, name, type, reason, recommendation}].\n\n"
-        f"Resources:\n{json.dumps(resource_list, indent=2)}"
+        "Given these Azure managed disks (JSON list), identify which are truly orphaned (unused) and explain why. "
+        "Return a JSON array of orphaned disks, each with id, name, and reason:\n"
+        f"{disks}"
     )
-
-    # Call Azure OpenAI
-    openai.api_key = os.getenv("OPENAI_KEY")
-    response = openai.ChatCompletion.create(
+    response = openai_client.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a helpful cloud expert."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=1500,
-        temperature=0.0
+        messages=[{"role": "system", "content": prompt}]
     )
-    # Parse the assistant's JSON output
+    # Try to parse JSON output, else return raw
     try:
-        output_text = response["choices"][0]["message"]["content"]
-        deprecated = json.loads(output_text)
-    except Exception as e:
-        deprecated = {"error": "Failed to parse response", "details": str(e), "raw": output_text}
-
-    return deprecated
+        import json
+        return json.loads(response.choices[0].message.content)
+    except Exception:
+        return response.choices[0].message.content

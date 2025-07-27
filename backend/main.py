@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import httpx
 
 load_dotenv()
 
@@ -14,7 +15,6 @@ from agents.delete_orphaned import delete_orphaned_resources
 from agents.detect_deprecated import detect_deprecated_resources
 from agents.upgrade_deprecated import upgrade_deprecated_resources
 
-# --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -23,11 +23,9 @@ logger = logging.getLogger("tenant-optimizer")
 
 app = FastAPI()
 
-# --- CORS Middleware ---
 origins = [
     "https://tenant-optimizer-web.azurewebsites.net"
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -41,7 +39,6 @@ oauth2_scheme = OAuth2AuthorizationCodeBearer(
     tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
 )
 
-# Mount static files at /static
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount(
     "/static", 
@@ -53,16 +50,62 @@ app.mount(
 def health_check():
     return {"status": "ok"}
 
-@app.get("/scan/orphaned")
-async def scan_orphaned(token: str = Depends(oauth2_scheme)):
+# New: List subscriptions for the signed-in user
+@app.get("/subscriptions")
+async def list_subscriptions(token: str = Depends(oauth2_scheme)):
+    """
+    Uses the user's token to list all visible subscriptions.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    url = "https://management.azure.com/subscriptions?api-version=2020-01-01"
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error(f"/subscriptions: {resp.status_code} {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        data = resp.json()
+        return [
+            {
+                "subscriptionId": sub["subscriptionId"],
+                "displayName": sub["displayName"]
+            }
+            for sub in data.get("value", [])
+        ]
+
+@app.post("/scan/orphaned")
+async def scan_orphaned(payload: dict, token: str = Depends(oauth2_scheme)):
+    """
+    Expects: { "subscriptions": [ "subid1", "subid2", ... ] }
+    """
     logger.info("scan_orphaned: called")
     try:
-        logger.info(f"scan_orphaned: token received: {token[:20]}...")  # Don't log full token
-        result = detect_orphaned_resources(token)
+        subscriptions = payload.get("subscriptions")
+        if not subscriptions:
+            raise HTTPException(status_code=400, detail="subscriptions are required")
+        result = detect_orphaned_resources(token, subscriptions)
         logger.info(f"scan_orphaned: result: {result}")
         return result
     except Exception as e:
         logger.error(f"scan_orphaned: exception: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/scan/deprecated")
+async def scan_deprecated(payload: dict, token: str = Depends(oauth2_scheme)):
+    """
+    Expects: { "subscriptions": [ "subid1", "subid2", ... ] }
+    """
+    logger.info("scan_deprecated: called")
+    try:
+        subscriptions = payload.get("subscriptions")
+        if not subscriptions:
+            raise HTTPException(status_code=400, detail="subscriptions are required")
+        result = detect_deprecated_resources(token, subscriptions)
+        logger.info(f"scan_deprecated: result: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"scan_deprecated: exception: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/delete/orphaned")
@@ -70,7 +113,6 @@ async def delete_orphaned(approval_payload: dict, token: str = Depends(oauth2_sc
     logger.info("delete_orphaned: called")
     logger.info(f"delete_orphaned: payload: {approval_payload}")
     try:
-        logger.info(f"delete_orphaned: token received: {token[:20]}...")
         result = delete_orphaned_resources(token, approval_payload)
         logger.info(f"delete_orphaned: result: {result}")
         return result
@@ -78,24 +120,11 @@ async def delete_orphaned(approval_payload: dict, token: str = Depends(oauth2_sc
         logger.error(f"delete_orphaned: exception: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/scan/deprecated")
-async def scan_deprecated(token: str = Depends(oauth2_scheme)):
-    logger.info("scan_deprecated: called")
-    try:
-        logger.info(f"scan_deprecated: token received: {token[:20]}...")
-        result = detect_deprecated_resources(token)
-        logger.info(f"scan_deprecated: result: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"scan_deprecated: exception: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/upgrade/deprecated")
 async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2_scheme)):
     logger.info("upgrade_deprecated: called")
     logger.info(f"upgrade_deprecated: payload: {approval_payload}")
     try:
-        logger.info(f"upgrade_deprecated: token received: {token[:20]}...")
         result = upgrade_deprecated_resources(token, approval_payload)
         logger.info(f"upgrade_deprecated: result: {result}")
         return result
@@ -103,12 +132,10 @@ async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2
         logger.error(f"upgrade_deprecated: exception: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Serve SPA index.html at root ---
 @app.get("/", include_in_schema=False)
 def serve_index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
-# --- SPA catch-all for client-side routing ---
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa_catch_all(full_path: str, request: Request):
     file_candidate = os.path.join(STATIC_DIR, full_path)

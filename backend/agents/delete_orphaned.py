@@ -4,10 +4,14 @@ from azure.mgmt.resource import ResourceManagementClient
 def delete_orphaned_resources(token, approval_payload):
     """
     Deletes the orphaned resources listed in approval_payload.
-    approval_payload: dict with 'resources': list of { 'id': resourceId }
+    approval_payload: dict with:
+      - 'subscription_id': subscription id string
+      - 'resources': list of { 'id': resourceId }
     """
     cred = DefaultAzureCredential()
     subscription_id = approval_payload.get('subscription_id')
+    if not subscription_id:
+        return {"error": "subscription_id required in approval_payload"}
     client = ResourceManagementClient(cred, subscription_id)
     deleted = []
     for res in approval_payload.get('resources', []):
