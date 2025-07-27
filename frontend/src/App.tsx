@@ -41,17 +41,25 @@ function App() {
       return;
     }
     try {
+      // 1. Login: Only use app scopes (no ARM .default here!)
       const loginResponse = await msalInstance.loginPopup({
-        scopes: [backendApiScope, azureArmScope],
+        scopes: [
+          "openid",
+          "profile",
+          "offline_access",
+          backendApiScope
+        ]
       });
       setAccount(loginResponse.account);
 
+      // 2. Get API token (optional, you can also use loginResponse.accessToken)
       const apiTokenResp = await msalInstance.acquireTokenSilent({
         account: loginResponse.account,
         scopes: [backendApiScope],
       });
       setApiToken(apiTokenResp.accessToken);
 
+      // 3. Get ARM token (separate call, after login!)
       const armTokenResp = await msalInstance.acquireTokenSilent({
         account: loginResponse.account,
         scopes: [azureArmScope],
