@@ -2,15 +2,16 @@ import React, { useEffect, useState } from "react";
 import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
 
 // === MSAL Configuration ===
-// Replace these with your real values!
+// Replace these with your actual Azure values!
 const msalConfig = {
   auth: {
-    clientId: "9a164f91-1339-4504-b38e-cf089a90f6fb", // <-- Replace with your SPA App Registration's clientId
-    authority: "https://login.microsoftonline.com/36d8a1ac-8d2d-4744-b032-9074fd822ec5", // <-- Replace with your Tenant ID
-    redirectUri: "https://tenant-optimizer-web.azurewebsites.net/", // <-- Or your localhost for dev
+    clientId: "9a164f91-1339-4504-b38e-cf089a90f6fb", // SPA App Registration's clientId
+    authority: "https://login.microsoftonline.com/36d8a1ac-8d2d-4744-b032-9074fd822ec5", // Directory (tenant) ID
+    redirectUri: "https://tenant-optimizer-web.azurewebsites.net/",
   },
 };
-const apiScope = "api://b0a762fa-2904-4726-b991-871dbfe84f28/user_impersonation"; // <-- Replace with your API App Registration's clientId
+const apiScope =
+  "api://b0a762fa-2904-4726-b991-871dbfe84f28/user_impersonation"; // Replace YOUR-API-CLIENT-ID with your backend API app registration's clientId
 
 const msalInstance = new PublicClientApplication(msalConfig);
 
@@ -62,11 +63,11 @@ const styles = {
   } as React.CSSProperties,
   th: {
     borderBottom: "2px solid #6a11cb",
-    textAlign: "left" as const,
+    textAlign: "left",
     padding: "8px",
     background: "#f3e7ff",
     color: "#512da8",
-  },
+  } as React.CSSProperties,
   td: {
     padding: "8px",
     borderBottom: "1px solid #ddd",
@@ -106,7 +107,7 @@ const styles = {
     transition: "background 0.2s",
   },
   signInOut: {
-    float: "right" as "right",
+    cssFloat: "right",
     marginTop: -10,
     marginBottom: 28,
   },
@@ -118,6 +119,15 @@ const styles = {
     fontWeight: 500,
     fontSize: 14,
     marginLeft: 10,
+  },
+  link: {
+    color: "#2575fc",
+    textDecoration: "none",
+    cursor: "pointer",
+    fontSize: 16,
+    fontWeight: 500,
+    margin: "0 0 24px 0",
+    display: "inline-block",
   },
 };
 
@@ -138,6 +148,7 @@ type ApprovalAction = {
 function App() {
   // === MSAL state ===
   const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [isMsalReady, setIsMsalReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // === Data state ===
@@ -145,19 +156,24 @@ function App() {
   const [approvals, setApprovals] = useState<ApprovalAction[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // On mount, check if user is signed in
+  // On mount, initialize MSAL and check if user is signed in
   useEffect(() => {
-    msalInstance.handleRedirectPromise().then((response) => {
-      let acc: AccountInfo | null = null;
-      if (response && response.account) {
-        acc = response.account;
-      } else {
-        const accts = msalInstance.getAllAccounts();
-        if (accts.length > 0) acc = accts[0];
-      }
-      setAccount(acc);
-      if (acc) msalInstance.setActiveAccount(acc);
+    msalInstance.initialize().then(() => {
+      setIsMsalReady(true);
+      msalInstance.handleRedirectPromise().then((response) => {
+        let acc: AccountInfo | null = null;
+        if (response && response.account) {
+          acc = response.account;
+        } else {
+          const accts = msalInstance.getAllAccounts();
+          if (accts.length > 0) acc = accts[0];
+        }
+        setAccount(acc);
+        if (acc) msalInstance.setActiveAccount(acc);
+      });
     });
+    // No dependencies: run once on mount
+    // eslint-disable-next-line
   }, []);
 
   // Sign in/out handlers
@@ -235,6 +251,18 @@ function App() {
   }
 
   // --- UI ---
+  if (!isMsalReady) {
+    return (
+      <div style={styles.body as React.CSSProperties}>
+        <div style={styles.container}>
+          <div style={{ fontSize: 22, color: "#512da8", fontWeight: 600 }}>
+            Loading authentication...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.body as React.CSSProperties}>
       <div style={styles.container}>
@@ -255,18 +283,26 @@ function App() {
             <b>Optimize and secure your Azure Tenant!</b>
             <br />
             <br />
-            <span>
-              Tenant Optimizer is your AI-powered assistant for Azure Tenant organizations.
-              It scans your environment to detect <b>orphaned</b> (unused) and <b>deprecated</b> (outdated) resources,
-              helping you identify cost savings and improve security. The app guides you through reviewing, approving, and remediating these resources—
-              <b>never deleting or upgrading anything automatically without your explicit approval</b>.
-              <br />
-              <br />
-              <span style={{ color: "#2575fc" }}>
-                Sign in with your Microsoft Entra ID (Azure AD) account to get started.
-              </span>
+            Tenant Optimizer is your AI-powered tool for Azure Tenant organizations.
+            It scans your environment to detect <b>orphaned</b> (unused) and <b>deprecated</b> (outdated) resources,
+            This helps you spot cost savings and improve security.
+            The app walks you through reviewing, approving, and fixing these resources;
+            <b>it never deletes or upgrades anything automatically without your explicit approval.</b>.
+            <br />
+            <br />
+            <span style={{ color: "#2575fc" }}>
+              Sign in with your Microsoft Entra ID (Azure AD) account to begin.
             </span>
           </div>
+          <a
+            style={styles.link}
+            onClick={signIn}
+            href="#signin"
+            tabIndex={-1}
+          >
+            Sign in with your Microsoft Entra ID (Azure AD) account to get started.
+          </a>
+          <br />
           <button
             style={{
               ...styles.button,
