@@ -30,16 +30,24 @@ function App() {
 
   // Initialize MSAL on startup
   useEffect(() => {
-    msalInstance.initialize()
+    msalInstance
+      .initialize()
       .then(() => setMsalReady(true))
-      .catch((e) => setError("MSAL initialization failed: " + (e.message || e.toString())));
+      .catch((e) =>
+        setError(
+          "MSAL initialization failed: " + (e.message || e.toString())
+        )
+      );
   }, []);
 
   const handleLogin = async () => {
     if (!msalReady) {
-      setError("MSAL is not initialized yet. Please wait a moment and try again.");
+      setError(
+        "MSAL is not initialized yet. Please wait a moment and try again."
+      );
       return;
     }
+    setError(null);
     try {
       // 1. Login: Only use app scopes (no ARM .default here!)
       const loginResponse = await msalInstance.loginPopup({
@@ -47,8 +55,8 @@ function App() {
           "openid",
           "profile",
           "offline_access",
-          backendApiScope
-        ]
+          backendApiScope,
+        ],
       });
       setAccount(loginResponse.account);
 
@@ -60,10 +68,27 @@ function App() {
       setApiToken(apiTokenResp.accessToken);
 
       // 3. Get ARM token (separate call, after login!)
-      const armTokenResp = await msalInstance.acquireTokenSilent({
-        account: loginResponse.account,
-        scopes: [azureArmScope],
-      });
+      let armTokenResp;
+      try {
+        armTokenResp = await msalInstance.acquireTokenSilent({
+          account: loginResponse.account,
+          scopes: [azureArmScope],
+        });
+      } catch (e: any) {
+        // Interactive consent if needed
+        if (
+          e.errorCode === "interaction_required" ||
+          e.errorCode === "consent_required" ||
+          e.errorCode === "login_required"
+        ) {
+          armTokenResp = await msalInstance.acquireTokenPopup({
+            account: loginResponse.account,
+            scopes: [azureArmScope],
+          });
+        } else {
+          throw e;
+        }
+      }
       setArmToken(armTokenResp.accessToken);
 
       setError(null);
@@ -92,7 +117,9 @@ function App() {
         setSubscriptions([]);
       }
     } catch (e: any) {
-      setError(`Error fetching subscriptions: ${e.message || e.toString()}`);
+      setError(
+        `Error fetching subscriptions: ${e.message || e.toString()}`
+      );
       setSubscriptions([]);
     }
     setLoading(false);
@@ -117,7 +144,11 @@ function App() {
           The app walks you through reviewing, approving, and fixing these resources; <b>it never deletes or upgrades anything automatically without your explicit approval.</b>
         </p>
         {!account ? (
-          <button onClick={handleLogin} className="login-btn" disabled={!msalReady}>
+          <button
+            onClick={handleLogin}
+            className="login-btn"
+            disabled={!msalReady}
+          >
             {msalReady ? "Sign in with Microsoft" : "Initializing..."}
           </button>
         ) : (
