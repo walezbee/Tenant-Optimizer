@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -12,6 +13,20 @@ from agents.detect_deprecated import detect_deprecated_resources
 from agents.upgrade_deprecated import upgrade_deprecated_resources
 
 app = FastAPI()
+
+# --- CORS Middleware ---
+origins = [
+    "https://tenant-optimizer-web.azurewebsites.net"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 oauth2_scheme = OAuth2AuthorizationCodeBearer(
     authorizationUrl="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
