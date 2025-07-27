@@ -287,7 +287,7 @@ function App() {
             It scans your environment to detect <b>orphaned</b> (unused) and <b>deprecated</b> (outdated) resources,
             This helps you spot cost savings and improve security.
             The app walks you through reviewing, approving, and fixing these resources;
-            <b>it never deletes or upgrades anything automatically without your explicit approval.</b>.
+            <b> it never deletes or upgrades anything automatically without your explicit approval.</b>.
             <br />
             <br />
             <span style={{ color: "#2575fc" }}>
