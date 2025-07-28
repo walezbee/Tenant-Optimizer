@@ -78,6 +78,11 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
+@app.get("/api/test")
+def api_test():
+    """Test endpoint to verify API routing works."""
+    return {"message": "API routing works!", "timestamp": "2025-07-28"}
+
 @app.get("/health")
 def health_check():
     """Simple health check endpoint."""
@@ -178,9 +183,14 @@ def serve_index():
         return FileResponse(index_path)
     return {"message": "Welcome to Tenant Optimizer API"}
 
+# Static catch-all route must be LAST to avoid catching API routes
 @app.get("/{full_path:path}")
 async def spa_catch_all(full_path: str):
-    """Catch-all route for SPA."""
+    """Catch-all route for SPA - MUST BE LAST."""
+    # Skip API routes
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API endpoint not found")
+    
     file_candidate = os.path.join(STATIC_DIR, full_path)
     if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
         return FileResponse(file_candidate)
