@@ -1,25 +1,67 @@
-// Basic API wrapper for backend
-export async function fetchOrphanedResources() {
-    const res = await fetch('/api/scan/orphaned');
-    return await res.json();
-}
-export async function fetchDeprecatedResources() {
-    const res = await fetch('/api/scan/deprecated');
-    return await res.json();
-}
-export async function approveDeleteOrphaned(resources: any[]) {
-    const res = await fetch('/api/delete/orphaned', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ resources })
+// API wrapper for backend with authentication
+const API_BASE = window.location.origin; // Uses same domain as frontend
+
+async function apiCall(endpoint: string, options: RequestInit = {}) {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+        },
     });
-    return await res.json();
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API call failed: ${response.status} ${errorText}`);
+    }
+    
+    return await response.json();
 }
-export async function approveUpgradeDeprecated(resources: any[]) {
-    const res = await fetch('/api/upgrade/deprecated', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ resources })
+
+export async function fetchSubscriptions(armToken: string) {
+    return apiCall('/subscriptions', {
+        headers: {
+            'Authorization': `Bearer ${armToken}`,
+        },
     });
-    return await res.json();
+}
+
+export async function fetchOrphanedResources(armToken: string, subscriptions: string[]) {
+    return apiCall('/scan/orphaned', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${armToken}`,
+        },
+        body: JSON.stringify({ subscriptions }),
+    });
+}
+
+export async function fetchDeprecatedResources(armToken: string, subscriptions: string[]) {
+    return apiCall('/scan/deprecated', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${armToken}`,
+        },
+        body: JSON.stringify({ subscriptions }),
+    });
+}
+
+export async function approveDeleteOrphaned(armToken: string, approvalPayload: any) {
+    return apiCall('/delete/orphaned', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${armToken}`,
+        },
+        body: JSON.stringify(approvalPayload),
+    });
+}
+
+export async function approveUpgradeDeprecated(armToken: string, approvalPayload: any) {
+    return apiCall('/upgrade/deprecated', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${armToken}`,
+        },
+        body: JSON.stringify(approvalPayload),
+    });
 }

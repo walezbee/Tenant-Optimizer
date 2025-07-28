@@ -32,7 +32,7 @@ export const loginRequest = {
 
 // Scopes for ARM (Azure Resource Manager) API
 export const armRequest = {
-    scopes: ["https://management.azure.com/.default"],
+    scopes: ["https://management.azure.com/user_impersonation"], // Changed from .default
     prompt: "consent" // Force consent screen for admin approval
 };
 

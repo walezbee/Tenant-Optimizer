@@ -17,7 +17,9 @@ export const ConsentHelper: React.FC<ConsentHelperProps> = ({ error, onRetry }) 
   const generateAdminConsentUrl = () => {
     const clientId = '9a164f91-1339-4504-b38e-cf089a90f6fb';
     const redirectUri = encodeURIComponent('https://tenant-optimizer-web.azurewebsites.net');
-    return `https://login.microsoftonline.com/common/adminconsent?client_id=${clientId}&redirect_uri=${redirectUri}`;
+    // Add state parameter to track consent completion
+    const state = encodeURIComponent('admin_consent_completed');
+    return `https://login.microsoftonline.com/common/adminconsent?client_id=${clientId}&redirect_uri=${redirectUri}&state=${state}`;
   };
 
   const copyToClipboard = async (text: string) => {

@@ -1,13 +1,15 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.security import OAuth2AuthorizationCodeBearer
+import jwt
+import httpx
+import json
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-
-import httpx
 
 from agents.detect_orphaned import detect_orphaned_resources
 from agents.delete_orphaned import delete_orphaned_resources
@@ -25,7 +27,9 @@ logger = logging.getLogger("tenant-optimizer")
 app = FastAPI()
 
 origins = [
-    "https://tenant-optimizer-web.azurewebsites.net"
+    "https://tenant-optimizer-web.azurewebsites.net",
+    "http://localhost:3000",  # For development
+    "http://localhost:5173"   # For Vite dev server
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -35,10 +39,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-oauth2_scheme = OAuth2AuthorizationCodeBearer(
-    authorizationUrl="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl="https://login.microsoftonline.com/common/oauth2/v2.0/token"
-)
+# Use HTTPBearer for proper token extraction
+security = HTTPBearer()
+
+# Expected audience (your backend API client ID)
+EXPECTED_AUDIENCE = os.getenv("AZURE_CLIENT_ID", "b0a762fa-2904-4726-b991-871dbfe84f28")
+
+async def validate_azure_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Validates Azure AD JWT token and extracts user information.
+    For production, implement proper JWT validation with signing key verification.
+    """
+    token = credentials.credentials
+    
+    try:
+        # For development - decode without verification (NOT for production!)
+        # In production, you should verify the signature using Azure AD's public keys
+        decoded = jwt.decode(token, options={"verify_signature": False})
+        
+        # Basic validation
+        now = datetime.now(timezone.utc).timestamp()
+        if decoded.get('exp', 0) < now:
+            raise HTTPException(status_code=401, detail="Token expired")
+            
+        # Validate audience if present
+        aud = decoded.get('aud')
+        if aud and aud not in [EXPECTED_AUDIENCE, "https://management.azure.com/"]:
+            logger.warning(f"Token audience mismatch: {aud}")
+        
+        logger.info(f"Token validated for user: {decoded.get('name', 'unknown')}")
+        return token
+        
+    except jwt.InvalidTokenError as e:
+        logger.error(f"Invalid token: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logger.error(f"Token validation error: {e}")
+        raise HTTPException(status_code=401, detail="Token validation failed")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount(
@@ -52,7 +89,7 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/subscriptions")
-async def list_subscriptions(token: str = Depends(oauth2_scheme)):
+async def list_subscriptions(token: str = Depends(validate_azure_token)):
     """
     Uses the user's token to list all visible subscriptions.
     """
@@ -75,7 +112,7 @@ async def list_subscriptions(token: str = Depends(oauth2_scheme)):
         ]
 
 @app.post("/scan/orphaned")
-async def scan_orphaned(payload: dict, token: str = Depends(oauth2_scheme)):
+async def scan_orphaned(payload: dict, token: str = Depends(validate_azure_token)):
     logger.info("scan_orphaned: called")
     try:
         subscriptions = payload.get("subscriptions")
@@ -89,7 +126,7 @@ async def scan_orphaned(payload: dict, token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scan/deprecated")
-async def scan_deprecated(payload: dict, token: str = Depends(oauth2_scheme)):
+async def scan_deprecated(payload: dict, token: str = Depends(validate_azure_token)):
     logger.info("scan_deprecated: called")
     try:
         subscriptions = payload.get("subscriptions")
@@ -103,7 +140,7 @@ async def scan_deprecated(payload: dict, token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/delete/orphaned")
-async def delete_orphaned(approval_payload: dict, token: str = Depends(oauth2_scheme)):
+async def delete_orphaned(approval_payload: dict, token: str = Depends(validate_azure_token)):
     logger.info("delete_orphaned: called")
     logger.info(f"delete_orphaned: payload: {approval_payload}")
     try:
@@ -115,7 +152,7 @@ async def delete_orphaned(approval_payload: dict, token: str = Depends(oauth2_sc
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upgrade/deprecated")
-async def upgrade_deprecated(approval_payload: dict, token: str = Depends(oauth2_scheme)):
+async def upgrade_deprecated(approval_payload: dict, token: str = Depends(validate_azure_token)):
     logger.info("upgrade_deprecated: called")
     logger.info(f"upgrade_deprecated: payload: {approval_payload}")
     try:

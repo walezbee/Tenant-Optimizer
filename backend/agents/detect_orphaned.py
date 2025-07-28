@@ -1,6 +1,6 @@
 import os
 import httpx
-import openai
+from openai import OpenAI
 import json
 
 async def detect_orphaned_resources(user_token, subscriptions):
@@ -27,23 +27,40 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "subscriptions": subscriptions,
         "query": query
     }
+    
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
+    
     disks = [dict(row) for row in data.get("data", [])]
-
-    openai.api_key = os.getenv("OPENAI_KEY")
+    
+    # Initialize OpenAI client
+    client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
+    
     prompt = (
         "Given these Azure managed disks (JSON list), identify which are truly orphaned (unused) and explain why. "
         "Return a JSON array of orphaned disks, each with id, name, and reason:\n"
-        f"{disks}"
+        f"{json.dumps(disks, indent=2)}"
     )
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": prompt}]
-    )
+    
     try:
-        return json.loads(response.choices[0].message.content)
-    except Exception:
-        return response.choices[0].message.content
+        response = client.chat.completions.create(
+            model="gpt-4",  # Use gpt-4 instead of gpt-4o if not available
+            messages=[
+                {"role": "system", "content": "You are an Azure cloud optimization expert."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1500,
+            temperature=0.0
+        )
+        
+        result = response.choices[0].message.content
+        # Try to parse as JSON, fallback to string
+        try:
+            return json.loads(result)
+        except json.JSONDecodeError:
+            return result
+            
+    except Exception as e:
+        return {"error": f"OpenAI API error: {str(e)}", "disks": disks}
