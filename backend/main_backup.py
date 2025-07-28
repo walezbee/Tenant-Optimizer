@@ -1,37 +1,20 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Depends, Request
+import jwt
+import httpx
+import json
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Import httpx and jwt conditionally to avoid startup failures
-try:
-    import httpx
-    import jwt
-    from datetime import datetime, timezone
-    JWT_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: JWT dependencies not available: {e}")
-    JWT_AVAILABLE = False
-
-# Import agents conditionally
-try:
-    from agents.detect_orphaned import detect_orphaned_resources
-    from agents.delete_orphaned import delete_orphaned_resources  
-    from agents.detect_deprecated import detect_deprecated_resources
-    from agents.upgrade_deprecated import upgrade_deprecated_resources
-    AGENTS_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Agent modules not available: {e}")
-    AGENTS_AVAILABLE = False
-    # Create dummy functions
-    async def detect_orphaned_resources(token, subs): return {"error": "Agents not available"}
-    async def delete_orphaned_resources(token, payload): return {"error": "Agents not available"}
-    async def detect_deprecated_resources(token, subs): return {"error": "Agents not available"}
-    async def upgrade_deprecated_resources(token, payload): return {"error": "Agents not available"}
+from agents.detect_orphaned import detect_orphaned_resources
+from agents.delete_orphaned import delete_orphaned_resources
+from agents.detect_deprecated import detect_deprecated_resources
+from agents.upgrade_deprecated import upgrade_deprecated_resources
 
 load_dotenv()
 
@@ -41,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tenant-optimizer")
 
-app = FastAPI(title="Tenant Optimizer API", version="1.0.0")
+app = FastAPI()
 
 origins = [
     "https://tenant-optimizer-web.azurewebsites.net",
@@ -65,14 +48,9 @@ EXPECTED_AUDIENCE = os.getenv("AZURE_CLIENT_ID", "b0a762fa-2904-4726-b991-871dbf
 async def validate_azure_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
     Validates Azure AD JWT token and extracts user information.
-    Simplified version for production deployment.
+    For production, implement proper JWT validation with signing key verification.
     """
     token = credentials.credentials
-    
-    if not JWT_AVAILABLE:
-        # If JWT library not available, just return the token (not secure for production)
-        logger.warning("JWT validation disabled - library not available")
-        return token
     
     try:
         # For development - decode without verification (NOT for production!)
@@ -92,11 +70,12 @@ async def validate_azure_token(credentials: HTTPAuthorizationCredentials = Depen
         logger.info(f"Token validated for user: {decoded.get('name', 'unknown')}")
         return token
         
+    except jwt.InvalidTokenError as e:
+        logger.error(f"Invalid token: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
     except Exception as e:
         logger.error(f"Token validation error: {e}")
-        # For now, return token anyway to avoid blocking
-        logger.warning("Proceeding with unvalidated token")
-        return token
+        raise HTTPException(status_code=401, detail="Token validation failed")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount(
@@ -105,45 +84,32 @@ app.mount(
     name="static"
 )
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 def health_check():
-    return {
-        "status": "ok",
-        "jwt_available": JWT_AVAILABLE,
-        "agents_available": AGENTS_AVAILABLE,
-        "environment": os.getenv("ENVIRONMENT", "development")
-    }
+    return {"status": "ok"}
 
 @app.get("/subscriptions")
 async def list_subscriptions(token: str = Depends(validate_azure_token)):
     """
     Uses the user's token to list all visible subscriptions.
     """
-    if not httpx:
-        raise HTTPException(status_code=500, detail="HTTP client not available")
-        
     headers = {
         "Authorization": f"Bearer {token}"
     }
     url = "https://management.azure.com/subscriptions?api-version=2020-01-01"
-    
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:
-                logger.error(f"/subscriptions: {resp.status_code} {resp.text}")
-                raise HTTPException(status_code=resp.status_code, detail=resp.text)
-            data = resp.json()
-            return [
-                {
-                    "subscriptionId": sub["subscriptionId"],
-                    "displayName": sub["displayName"]
-                }
-                for sub in data.get("value", [])
-            ]
-    except httpx.RequestError as e:
-        logger.error(f"Request error: {e}")
-        raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error(f"/subscriptions: {resp.status_code} {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        data = resp.json()
+        return [
+            {
+                "subscriptionId": sub["subscriptionId"],
+                "displayName": sub["displayName"]
+            }
+            for sub in data.get("value", [])
+        ]
 
 @app.post("/scan/orphaned")
 async def scan_orphaned(payload: dict, token: str = Depends(validate_azure_token)):

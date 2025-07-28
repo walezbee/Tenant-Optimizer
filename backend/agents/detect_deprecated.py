@@ -64,7 +64,7 @@ async def detect_deprecated_resources(user_token, subscriptions):
             
     except Exception as e:
         return {"error": f"OpenAI API error: {str(e)}", "resources": resources}
-    )
+
     try:
         output_text = response.choices[0].message.content
         deprecated = json.loads(output_text)
