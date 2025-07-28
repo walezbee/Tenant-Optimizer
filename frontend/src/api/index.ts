@@ -19,7 +19,7 @@ async function apiCall(endpoint: string, options: RequestInit = {}) {
 }
 
 export async function fetchSubscriptions(armToken: string) {
-    return apiCall('/subscriptions', {
+    return apiCall('/api/subscriptions', {
         headers: {
             'Authorization': `Bearer ${armToken}`,
         },
@@ -27,7 +27,7 @@ export async function fetchSubscriptions(armToken: string) {
 }
 
 export async function fetchOrphanedResources(armToken: string, subscriptions: string[]) {
-    return apiCall('/scan/orphaned', {
+    return apiCall('/api/scan/orphaned', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${armToken}`,
@@ -37,7 +37,7 @@ export async function fetchOrphanedResources(armToken: string, subscriptions: st
 }
 
 export async function fetchDeprecatedResources(armToken: string, subscriptions: string[]) {
-    return apiCall('/scan/deprecated', {
+    return apiCall('/api/scan/deprecated', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${armToken}`,
@@ -47,7 +47,7 @@ export async function fetchDeprecatedResources(armToken: string, subscriptions: 
 }
 
 export async function approveDeleteOrphaned(armToken: string, approvalPayload: any) {
-    return apiCall('/delete/orphaned', {
+    return apiCall('/api/delete/orphaned', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${armToken}`,
@@ -57,7 +57,7 @@ export async function approveDeleteOrphaned(armToken: string, approvalPayload: a
 }
 
 export async function approveUpgradeDeprecated(armToken: string, approvalPayload: any) {
-    return apiCall('/upgrade/deprecated', {
+    return apiCall('/api/upgrade/deprecated', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${armToken}`,

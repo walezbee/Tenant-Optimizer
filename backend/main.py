@@ -98,7 +98,7 @@ async def get_user_info(user_info: Dict[str, Any] = Depends(verify_azure_token))
     }
 
 # API endpoints that require authentication
-@app.get("/subscriptions")
+@app.get("/api/subscriptions")
 async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
     List user's Azure subscriptions using their token.
@@ -130,7 +130,7 @@ async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_to
         logger.error(f"Subscription fetch error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.post("/scan/orphaned")
+@app.post("/api/scan/orphaned")
 async def scan_orphaned(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
     Scan for orphaned Azure resources.
@@ -149,7 +149,7 @@ async def scan_orphaned(payload: dict, user_info: Dict[str, Any] = Depends(verif
         logger.error(f"Orphaned scan error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
 
-@app.post("/scan/deprecated")
+@app.post("/api/scan/deprecated")
 async def scan_deprecated(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
     Scan for deprecated Azure resources.
