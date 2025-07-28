@@ -97,29 +97,7 @@ async def get_user_info(user_info: Dict[str, Any] = Depends(verify_azure_token))
         "tenant_id": user_info.get("tenant_id")
     }
 
-@app.get("/")
-def serve_index():
-    """Serve the main index page."""
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"message": "Welcome to Tenant Optimizer API"}
-
-@app.get("/{full_path:path}")
-async def spa_catch_all(full_path: str):
-    """Catch-all route for SPA."""
-    file_candidate = os.path.join(STATIC_DIR, full_path)
-    if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
-        return FileResponse(file_candidate)
-    
-    # Return index.html for SPA routes
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    
-    return {"message": "File not found", "requested": full_path}
-
-# Basic API endpoints that now use authentication
+# API endpoints that require authentication
 @app.get("/subscriptions")
 async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
@@ -189,6 +167,28 @@ async def scan_deprecated(payload: dict, user_info: Dict[str, Any] = Depends(ver
     except Exception as e:
         logger.error(f"Deprecated scan error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
+
+@app.get("/")
+def serve_index():
+    """Serve the main index page."""
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "Welcome to Tenant Optimizer API"}
+
+@app.get("/{full_path:path}")
+async def spa_catch_all(full_path: str):
+    """Catch-all route for SPA."""
+    file_candidate = os.path.join(STATIC_DIR, full_path)
+    if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
+        return FileResponse(file_candidate)
+    
+    # Return index.html for SPA routes
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    
+    return {"message": "File not found", "requested": full_path}
 
 if __name__ == "__main__":
     import uvicorn
