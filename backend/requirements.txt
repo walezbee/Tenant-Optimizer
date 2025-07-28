@@ -1,19 +1,6 @@
-# Core FastAPI and server dependencies
+# Minimal requirements for basic functionality
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 gunicorn==23.0.0
 python-multipart==0.0.20
-
-# Environment and configuration
 python-dotenv==1.1.1
-
-# HTTP client and JWT handling
-httpx==0.27.0
-PyJWT==2.8.0
-
-# OpenAI integration
-openai==1.97.1
-
-# Additional dependencies
-cryptography>=3.4.8  # Required for PyJWT
-python-jose[cryptography]>=3.3.0  # Alternative JWT library
