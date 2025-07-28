@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
-import { msalConfig } from "./authConfig";
+import { msalConfig, loginRequest, armRequest, apiRequest } from "./authConfig";
+import ConsentHelper from "./components/ConsentHelper";
 import "./App.css";
 
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -48,52 +49,73 @@ function App() {
       return;
     }
     setError(null);
+    setLoading(true);
+    
     try {
-      // 1. Login: Only use app scopes (no ARM .default here!)
-      const loginResponse = await msalInstance.loginPopup({
-        scopes: [
-          "openid",
-          "profile",
-          "offline_access",
-          backendApiScope,
-        ],
-      });
+      // 1. Login with basic scopes first
+      const loginResponse = await msalInstance.loginPopup(loginRequest);
       setAccount(loginResponse.account);
 
-      // 2. Get API token (optional, you can also use loginResponse.accessToken)
-      const apiTokenResp = await msalInstance.acquireTokenSilent({
-        account: loginResponse.account,
-        scopes: [backendApiScope],
-      });
-      setApiToken(apiTokenResp.accessToken);
-
-      // 3. Get ARM token (separate call, after login!)
-      let armTokenResp;
+      // 2. Get API token for backend
       try {
-        armTokenResp = await msalInstance.acquireTokenSilent({
+        const apiTokenResp = await msalInstance.acquireTokenSilent({
           account: loginResponse.account,
-          scopes: [azureArmScope],
+          scopes: apiRequest.scopes,
         });
-      } catch (e: any) {
-        // Interactive consent if needed
-        if (
-          e.errorCode === "interaction_required" ||
-          e.errorCode === "consent_required" ||
-          e.errorCode === "login_required"
-        ) {
-          armTokenResp = await msalInstance.acquireTokenPopup({
+        setApiToken(apiTokenResp.accessToken);
+      } catch (apiError: any) {
+        console.warn("Could not get API token silently:", apiError);
+        // Try interactive consent for API
+        try {
+          const apiTokenResp = await msalInstance.acquireTokenPopup({
             account: loginResponse.account,
-            scopes: [azureArmScope],
+            scopes: apiRequest.scopes,
           });
-        } else {
-          throw e;
+          setApiToken(apiTokenResp.accessToken);
+        } catch (apiInteractiveError: any) {
+          console.error("API token interactive consent failed:", apiInteractiveError);
+          // Continue without API token for now
         }
       }
-      setArmToken(armTokenResp.accessToken);
+
+      // 3. Get ARM token (separate call, after login!)
+      try {
+        const armTokenResp = await msalInstance.acquireTokenSilent({
+          account: loginResponse.account,
+          scopes: armRequest.scopes,
+        });
+        setArmToken(armTokenResp.accessToken);
+      } catch (armError: any) {
+        // Interactive consent if needed
+        if (
+          armError.errorCode === "interaction_required" ||
+          armError.errorCode === "consent_required" ||
+          armError.errorCode === "login_required" ||
+          armError.errorCode === "admin_consent_required"
+        ) {
+          try {
+            const armTokenResp = await msalInstance.acquireTokenPopup({
+              account: loginResponse.account,
+              scopes: armRequest.scopes,
+              prompt: "consent"
+            });
+            setArmToken(armTokenResp.accessToken);
+          } catch (armInteractiveError: any) {
+            console.error("ARM token interactive consent failed:", armInteractiveError);
+            throw armInteractiveError;
+          }
+        } else {
+          throw armError;
+        }
+      }
 
       setError(null);
     } catch (e: any) {
-      setError(`Login failed: ${e.message || e.toString()}`);
+      console.error("Login error:", e);
+      const errorMessage = e.errorMessage || e.message || e.toString();
+      setError(`Login failed: ${errorMessage}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -161,9 +183,12 @@ function App() {
         )}
 
         {error && (
-          <div className="error" style={{ color: "red", margin: "1em" }}>
-            {error}
-          </div>
+          <>
+            <div className="error" style={{ color: "red", margin: "1em" }}>
+              {error}
+            </div>
+            <ConsentHelper error={error} onRetry={handleLogin} />
+          </>
         )}
 
         <h2>Detected Subscriptions</h2>
