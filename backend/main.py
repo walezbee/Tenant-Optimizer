@@ -84,7 +84,9 @@ def health_check():
     return {
         "status": "ok",
         "message": "Tenant Optimizer API is running",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "timestamp": "2025-07-28-19:10:00",
+        "api_prefix": "enabled"
     }
 
 @app.get("/user")
