@@ -34,6 +34,61 @@ async def detect_orphaned_resources(user_token, subscriptions):
     union
     
     // Orphaned Public IP Addresses (not associated with any resource)
+    (Resources
+    | where type =~ 'microsoft.network/publicipaddresses'
+    | where isnull(properties.ipConfiguration) or properties.ipConfiguration == ''
+    | extend ResourceType = 'Orphaned Public IP', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    union
+    
+    // Orphaned Network Interfaces (not attached to any VM)
+    (Resources
+    | where type =~ 'microsoft.network/networkinterfaces'
+    | where isnull(properties.virtualMachine) or properties.virtualMachine == ''
+    | extend ResourceType = 'Orphaned Network Interface', Cost = 'Standard'
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    union
+    
+    // Orphaned Network Security Groups (not associated with any subnet or NIC)
+    (Resources
+    | where type =~ 'microsoft.network/networksecuritygroups'
+    | where array_length(properties.subnets) == 0 and array_length(properties.networkInterfaces) == 0
+    | extend ResourceType = 'Orphaned Network Security Group', Cost = 'Free'
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    union
+    
+    // Orphaned Load Balancers (no backend pools or rules)
+    (Resources
+    | where type =~ 'microsoft.network/loadbalancers'
+    | where array_length(properties.backendAddressPools) == 0 or array_length(properties.loadBalancingRules) == 0
+    | extend ResourceType = 'Orphaned Load Balancer', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    union
+    
+    // Orphaned Application Gateways (no backend pools)
+    (Resources
+    | where type =~ 'microsoft.network/applicationgateways'
+    | where array_length(properties.backendAddressPools) == 0
+    | extend ResourceType = 'Orphaned Application Gateway', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    union
+    
+    // Orphaned Storage Accounts (empty or unused)
+    (Resources
+    | where type =~ 'microsoft.storage/storageaccounts'
+    | where tags['usage'] == 'unused' or tags['status'] == 'empty'
+    | extend ResourceType = 'Potentially Orphaned Storage Account', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    
+    | limit 200
+    """
+    
+    // Orphaned Public IP Addresses (not associated with any resource)
     Resources
     | where type =~ 'microsoft.network/publicipaddresses'
     | extend ipConfig = properties.ipConfiguration.id
@@ -140,24 +195,24 @@ async def detect_orphaned_resources(user_token, subscriptions):
             logger.info(f"📊 Found {len(rows)} rows with {len(columns)} columns")
             
             # Convert rows to dictionaries using column names
-            disks = []
+            resources = []
             if columns and rows:
                 column_names = [col["name"] for col in columns]
                 for row in rows:
-                    disk_dict = dict(zip(column_names, row))
-                    disks.append(disk_dict)
+                    resource_dict = dict(zip(column_names, row))
+                    resources.append(resource_dict)
         elif isinstance(data_content, list):
             # Direct list format (some API versions return this)
-            disks = data_content
-            logger.info(f"📊 Found {len(disks)} resources in list format")
+            resources = data_content
+            logger.info(f"📊 Found {len(resources)} resources in list format")
         else:
             # Fallback - check if data is directly in the response
             if "value" in data:
-                disks = data["value"]
-                logger.info(f"📊 Found {len(disks)} resources in value field")
+                resources = data["value"]
+                logger.info(f"📊 Found {len(resources)} resources in value field")
             else:
                 logger.warning("⚠️ Unexpected Resource Graph response format")
-                disks = []
+                resources = []
     
     except httpx.HTTPStatusError as e:
         logger.error(f"❌ Resource Graph HTTP error: {e.response.status_code} - {e.response.text}")
@@ -166,7 +221,7 @@ async def detect_orphaned_resources(user_token, subscriptions):
         logger.error(f"❌ Resource Graph error: {str(e)}")
         raise Exception(f"Failed to query Azure Resource Graph: {str(e)}")
     
-    if not disks:
+    if not resources:
         logger.info("✅ No orphaned resources found")
         return []
 
@@ -176,7 +231,7 @@ async def detect_orphaned_resources(user_token, subscriptions):
         logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
         # Return structured data without AI analysis
         orphaned_findings = []
-        for resource in disks:
+        for resource in resources:
             resource_type = resource.get("type", "").lower()
             resource_name = resource.get("name", "")
             resource_id = resource.get("id", "")
@@ -268,7 +323,7 @@ For each truly orphaned resource, return a JSON object with:
 - priority: High/Medium/Low based on cost impact
 
 RESOURCES TO ANALYZE:
-{json.dumps(disks, indent=2)}
+{json.dumps(resources, indent=2)}
 
 Return ONLY a JSON array of truly orphaned resources that are costing money unnecessarily. If no resources are orphaned, return an empty array [].
 """
@@ -297,15 +352,15 @@ Return ONLY a JSON array of truly orphaned resources that are costing money unne
             logger.warning("⚠️ OpenAI returned non-JSON response, using fallback data")
             return [
                 {
-                    "resourceId": disk.get("id", ""),
-                    "resourceName": disk.get("name", ""),
-                    "resourceType": disk.get("type", ""),
-                    "location": disk.get("location", ""),
-                    "resourceGroup": disk.get("resourceGroup", ""),
-                    "issue": "Potentially orphaned disk (AI analysis failed)",
-                    "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs. Note: AI analysis failed - basic recommendation provided."
+                    "resourceId": resource.get("id", ""),
+                    "resourceName": resource.get("name", ""),
+                    "resourceType": resource.get("type", ""),
+                    "location": resource.get("location", ""),
+                    "resourceGroup": resource.get("resourceGroup", ""),
+                    "issue": "Potentially orphaned resource (AI analysis failed)",
+                    "recommendation": "Review if this resource is still needed. If not, consider deleting to save costs. Note: AI analysis failed - basic recommendation provided."
                 }
-                for disk in disks
+                for resource in resources
             ]
             
     except Exception as e:
@@ -313,13 +368,13 @@ Return ONLY a JSON array of truly orphaned resources that are costing money unne
         # Return fallback data when OpenAI fails
         return [
             {
-                "resourceId": disk.get("id", ""),
-                "resourceName": disk.get("name", ""),
-                "resourceType": disk.get("type", ""),
-                "location": disk.get("location", ""),
-                "resourceGroup": disk.get("resourceGroup", ""),
-                "issue": "Potentially orphaned disk (AI analysis failed)",
-                "recommendation": f"Review if this disk is still needed. If not, consider deleting to save costs. Note: AI analysis failed due to: {str(e)}"
+                "resourceId": resource.get("id", ""),
+                "resourceName": resource.get("name", ""),
+                "resourceType": resource.get("type", ""),
+                "location": resource.get("location", ""),
+                "resourceGroup": resource.get("resourceGroup", ""),
+                "issue": "Potentially orphaned resource (AI analysis failed)",
+                "recommendation": f"Review if this resource is still needed. If not, consider deleting to save costs. Note: AI analysis failed due to: {str(e)}"
             }
-            for disk in disks
+            for resource in resources
         ]

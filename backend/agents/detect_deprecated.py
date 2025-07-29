@@ -33,6 +33,21 @@ async def detect_deprecated_resources(user_token, subscriptions):
         'microsoft.storage/storageaccounts',
         'microsoft.sql/servers',
         'microsoft.sql/servers/databases',
+        'microsoft.compute/disks',
+        'microsoft.web/sites',
+        'microsoft.web/serverfarms',
+        'microsoft.keyvault/vaults',
+        'microsoft.containerservice/managedclusters',
+        'microsoft.network/virtualnetworks',
+        'microsoft.insights/components',
+        'microsoft.automation/automationaccounts',
+        'microsoft.compute/availabilitysets',
+        'microsoft.network/networksecuritygroups',
+        'microsoft.network/routetables',
+        'microsoft.recovery/vaults'
+    )
+    | project id, name, type, location, resourceGroup, sku, kind, properties, tags
+    | limit 500
         'microsoft.compute/availabilitysets',
         'microsoft.network/networksecuritygroups',
         'microsoft.compute/virtualmachinescalesets',
