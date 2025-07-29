@@ -94,6 +94,70 @@ async def verify_azure_token(credentials: HTTPAuthorizationCredentials = Depends
         logger.error(f"Token verification failed: {str(e)}")
         raise HTTPException(status_code=401, detail="Authentication failed")
 
+@app.get("/api/subscriptions")
+async def get_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Get Azure subscriptions accessible to the user."""
+    try:
+        token = user_info['token']
+        
+        # Azure Management API endpoint for subscriptions
+        url = "https://management.azure.com/subscriptions?api-version=2020-01-01"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                result = response.json()
+                subscriptions = result.get("value", [])
+                
+                # Format subscriptions for frontend
+                formatted_subscriptions = []
+                for sub in subscriptions:
+                    formatted_subscriptions.append({
+                        "subscriptionId": sub.get("subscriptionId", ""),
+                        "displayName": sub.get("displayName", ""),
+                        "state": sub.get("state", ""),
+                        "tenantId": sub.get("tenantId", "")
+                    })
+                
+                logger.info(f"Successfully fetched {len(formatted_subscriptions)} subscriptions")
+                return {
+                    "success": True,
+                    "subscriptions": formatted_subscriptions,
+                    "count": len(formatted_subscriptions)
+                }
+            
+            elif response.status_code == 403:
+                logger.error("Insufficient permissions to list subscriptions")
+                return {
+                    "success": False,
+                    "error": "Insufficient permissions",
+                    "message": "User does not have permission to list subscriptions",
+                    "subscriptions": []
+                }
+            
+            else:
+                logger.error(f"Failed to fetch subscriptions: {response.status_code} - {response.text}")
+                return {
+                    "success": False,
+                    "error": f"API Error {response.status_code}",
+                    "message": response.text,
+                    "subscriptions": []
+                }
+                
+    except Exception as e:
+        logger.error(f"Error fetching subscriptions: {str(e)}")
+        return {
+            "success": False,
+            "error": "Request failed",
+            "message": str(e),
+            "subscriptions": []
+        }
+
 @app.get("/api/test/upgrade-agents")
 def test_upgrade_agents():
     """Test endpoint to show system status."""
@@ -129,17 +193,22 @@ def test_upgrade_agents():
     }
 
 @app.get("/api/scan/orphaned")
-async def scan_orphaned_resources(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+async def scan_orphaned_resources(subscription_ids: str = "", user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Scan for orphaned Azure resources."""
     try:
         token = user_info['token']
+        
+        # Parse subscription IDs
+        subscriptions = []
+        if subscription_ids:
+            subscriptions = [s.strip() for s in subscription_ids.split(',') if s.strip()]
         
         # Basic query for orphaned disks
         query = """
         Resources
         | where type == "microsoft.compute/disks"
         | where isnull(properties.managedBy)
-        | project id, name, resourceGroup, location, type, properties.diskSizeGB
+        | project id, name, resourceGroup, location, type, properties.diskSizeGB, subscriptionId
         | limit 50
         """
         
@@ -148,7 +217,11 @@ async def scan_orphaned_resources(user_info: Dict[str, Any] = Depends(verify_azu
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+        
+        # Build request data
         data = {"query": query}
+        if subscriptions:
+            data["subscriptions"] = subscriptions
         
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(url, headers=headers, json=data)
@@ -165,6 +238,7 @@ async def scan_orphaned_resources(user_info: Dict[str, Any] = Depends(verify_azu
                         "type": resource.get("type", ""),
                         "resourceGroup": resource.get("resourceGroup", ""),
                         "location": resource.get("location", ""),
+                        "subscriptionId": resource.get("subscriptionId", ""),
                         "priority": "Medium",
                         "cost_impact": f"${resource.get('properties_diskSizeGB', 0) * 0.05:.2f}/month estimated",
                         "analysis": "Orphaned disk - not attached to any VM"
@@ -175,12 +249,13 @@ async def scan_orphaned_resources(user_info: Dict[str, Any] = Depends(verify_azu
                     "message": f"Found {len(formatted_resources)} orphaned resources",
                     "resources": formatted_resources,
                     "total_resources": len(formatted_resources),
-                    "scan_timestamp": datetime.now().isoformat()
+                    "scan_timestamp": datetime.now().isoformat(),
+                    "subscriptions_scanned": len(subscriptions) if subscriptions else "all"
                 }
             else:
                 return {
                     "success": False,
-                    "message": f"Resource Graph API error: {response.status_code}",
+                    "message": f"Resource Graph API error: {response.status_code} - {response.text}",
                     "resources": [],
                     "total_resources": 0
                 }
@@ -195,17 +270,22 @@ async def scan_orphaned_resources(user_info: Dict[str, Any] = Depends(verify_azu
         }
 
 @app.get("/api/scan/deprecated")
-async def scan_deprecated_resources(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+async def scan_deprecated_resources(subscription_ids: str = "", user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Scan for deprecated Azure resources."""
     try:
         token = user_info['token']
+        
+        # Parse subscription IDs
+        subscriptions = []
+        if subscription_ids:
+            subscriptions = [s.strip() for s in subscription_ids.split(',') if s.strip()]
         
         # Basic query for deprecated resources
         query = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
         | where properties.sku.name == "Basic"
-        | project id, name, resourceGroup, location, type
+        | project id, name, resourceGroup, location, type, subscriptionId
         | limit 50
         """
         
@@ -214,7 +294,11 @@ async def scan_deprecated_resources(user_info: Dict[str, Any] = Depends(verify_a
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+        
+        # Build request data
         data = {"query": query}
+        if subscriptions:
+            data["subscriptions"] = subscriptions
         
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(url, headers=headers, json=data)
@@ -242,6 +326,7 @@ async def scan_deprecated_resources(user_info: Dict[str, Any] = Depends(verify_a
                         "type": resource.get("type", ""),
                         "resourceGroup": resource.get("resourceGroup", ""),
                         "location": resource.get("location", ""),
+                        "subscriptionId": resource.get("subscriptionId", ""),
                         "priority": "High",
                         "upgrade_type": upgrade_type,
                         "analysis": description,
@@ -253,12 +338,13 @@ async def scan_deprecated_resources(user_info: Dict[str, Any] = Depends(verify_a
                     "message": f"Found {len(formatted_resources)} deprecated resources",
                     "resources": formatted_resources,
                     "total_resources": len(formatted_resources),
-                    "scan_timestamp": datetime.now().isoformat()
+                    "scan_timestamp": datetime.now().isoformat(),
+                    "subscriptions_scanned": len(subscriptions) if subscriptions else "all"
                 }
             else:
                 return {
                     "success": False,
-                    "message": f"Resource Graph API error: {response.status_code}",
+                    "message": f"Resource Graph API error: {response.status_code} - {response.text}",
                     "resources": [],
                     "total_resources": 0
                 }
