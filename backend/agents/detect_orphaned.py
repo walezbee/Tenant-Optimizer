@@ -2,6 +2,9 @@ import os
 import httpx
 from openai import OpenAI
 import json
+import logging
+
+logger = logging.getLogger("tenant-optimizer")
 
 async def detect_orphaned_resources(user_token, subscriptions):
     """
@@ -12,55 +15,141 @@ async def detect_orphaned_resources(user_token, subscriptions):
     Returns:
         OpenAI's classification of orphaned disks, as string or dict.
     """
-    url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2023-07-01"
+    # Use the correct Resource Graph API endpoint and version
+    url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
     headers = {
         "Authorization": f"Bearer {user_token}",
         "Content-Type": "application/json"
     }
+    
+    # Query for orphaned managed disks
     query = """
-    resources
+    Resources
     | where type =~ 'microsoft.compute/disks'
-    | where managedBy == ''
-    | project id, name, type, location, managedBy, sku, tags
+    | where isnull(managedBy) or managedBy == ''
+    | project id, name, type, location, resourceGroup, managedBy, sku, tags, properties
+    | limit 100
     """
+    
     payload = {
         "subscriptions": subscriptions,
         "query": query
     }
     
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    logger.info(f"🔍 Querying Resource Graph for orphaned resources in {len(subscriptions)} subscriptions")
+    logger.info(f"📡 Resource Graph URL: {url}")
     
-    disks = [dict(row) for row in data.get("data", [])]
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            logger.info(f"📡 Resource Graph response status: {resp.status_code}")
+            
+            if resp.status_code != 200:
+                logger.error(f"❌ Resource Graph error: {resp.text}")
+            
+            resp.raise_for_status()
+            data = resp.json()
+            
+        # Extract the rows from the Resource Graph response
+        rows = data.get("data", {}).get("rows", [])
+        columns = data.get("data", {}).get("columns", [])
+        
+        logger.info(f"📊 Found {len(rows)} potential orphaned resources")
+        
+        # Convert rows to dictionaries using column names
+        disks = []
+        if columns and rows:
+            column_names = [col["name"] for col in columns]
+            for row in rows:
+                disk_dict = dict(zip(column_names, row))
+                disks.append(disk_dict)
+    
+    except httpx.HTTPStatusError as e:
+        logger.error(f"❌ Resource Graph HTTP error: {e.response.status_code} - {e.response.text}")
+        raise Exception(f"Azure Resource Graph API error: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        logger.error(f"❌ Resource Graph error: {str(e)}")
+        raise Exception(f"Failed to query Azure Resource Graph: {str(e)}")
+    
+    if not disks:
+        logger.info("✅ No orphaned resources found")
+        return []
+
+    # Check if OpenAI API key is available
+    openai_key = os.getenv("OPENAI_KEY")
+    if not openai_key:
+        logger.warning("⚠️ OpenAI API key not found, returning raw data")
+        # Return structured data without AI analysis
+        return [
+            {
+                "resourceId": disk.get("id", ""),
+                "resourceName": disk.get("name", ""),
+                "resourceType": disk.get("type", ""),
+                "location": disk.get("location", ""),
+                "resourceGroup": disk.get("resourceGroup", ""),
+                "issue": "Potentially orphaned disk (not attached to any VM)",
+                "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs."
+            }
+            for disk in disks
+        ]
     
     # Initialize OpenAI client
-    client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
+    client = OpenAI(api_key=openai_key)
     
     prompt = (
         "Given these Azure managed disks (JSON list), identify which are truly orphaned (unused) and explain why. "
-        "Return a JSON array of orphaned disks, each with id, name, and reason:\n"
+        "For each orphaned disk, return a JSON object with: resourceId, resourceName, resourceType, location, resourceGroup, issue, recommendation. "
+        "Return as a JSON array:\n"
         f"{json.dumps(disks, indent=2)}"
     )
     
     try:
+        logger.info("🤖 Analyzing orphaned resources with OpenAI...")
         response = client.chat.completions.create(
             model="gpt-4",  # Use gpt-4 instead of gpt-4o if not available
             messages=[
-                {"role": "system", "content": "You are an Azure cloud optimization expert."},
+                {"role": "system", "content": "You are an Azure cloud optimization expert. Analyze resources and return structured JSON responses."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=1500,
+            max_tokens=2000,
             temperature=0.0
         )
         
         result = response.choices[0].message.content
-        # Try to parse as JSON, fallback to string
+        # Try to parse as JSON, fallback to structured data
         try:
-            return json.loads(result)
+            parsed_result = json.loads(result)
+            if isinstance(parsed_result, list):
+                return parsed_result
+            else:
+                return [parsed_result] if isinstance(parsed_result, dict) else []
         except json.JSONDecodeError:
-            return result
+            logger.warning("⚠️ OpenAI returned non-JSON response, using fallback data")
+            return [
+                {
+                    "resourceId": disk.get("id", ""),
+                    "resourceName": disk.get("name", ""),
+                    "resourceType": disk.get("type", ""),
+                    "location": disk.get("location", ""),
+                    "resourceGroup": disk.get("resourceGroup", ""),
+                    "issue": "AI analysis unavailable - Potentially orphaned disk",
+                    "recommendation": "Manual review required. Check if disk is attached to any VM."
+                }
+                for disk in disks
+            ]
             
     except Exception as e:
-        return {"error": f"OpenAI API error: {str(e)}", "disks": disks}
+        logger.error(f"❌ OpenAI API error: {str(e)}")
+        # Return fallback structured data
+        return [
+            {
+                "resourceId": disk.get("id", ""),
+                "resourceName": disk.get("name", ""),
+                "resourceType": disk.get("type", ""),
+                "location": disk.get("location", ""),
+                "resourceGroup": disk.get("resourceGroup", ""),
+                "issue": f"AI analysis failed: {str(e)[:100]}...",
+                "recommendation": "Manual review required. Check if disk is attached to any VM."
+            }
+            for disk in disks
+        ]

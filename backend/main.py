@@ -9,6 +9,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 from typing import Dict, Any
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 # Basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tenant-optimizer")
@@ -164,6 +168,31 @@ async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_to
     except Exception as e:
         logger.error(f"Subscription fetch error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/api/test-resource-graph")
+async def test_resource_graph(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Test Resource Graph API connectivity."""
+    try:
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
+        headers = {"Authorization": f"Bearer {user_info['token']}", "Content-Type": "application/json"}
+        
+        # Simple test query
+        payload = {
+            "subscriptions": [],  # Empty to query all accessible subscriptions
+            "query": "Resources | limit 1"
+        }
+        
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            
+        return {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "error": response.text if response.status_code != 200 else None
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.post("/api/scan/orphaned")
 async def scan_orphaned(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
