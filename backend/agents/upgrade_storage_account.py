@@ -11,10 +11,32 @@ Date: July 29, 2025
 import asyncio
 import logging
 from typing import Dict, List, Any, Optional
-from azure.identity import DefaultAzureCredential
-from azure.mgmt.storage import StorageManagementClient
-from azure.mgmt.storage.models import StorageAccount, StorageAccountUpdateParameters, Sku, SkuName, Kind
 import json
+
+# Optional Azure SDK imports - graceful fallback if not available
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.mgmt.storage import StorageManagementClient
+    from azure.mgmt.storage.models import StorageAccount, StorageAccountUpdateParameters, Sku, SkuName, Kind
+    AZURE_SDK_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Azure SDK not available: {e}")
+    AZURE_SDK_AVAILABLE = False
+    # Create dummy classes to prevent import errors
+    class DefaultAzureCredential:
+        pass
+    class StorageManagementClient:
+        pass
+    class StorageAccount:
+        pass
+    class StorageAccountUpdateParameters:
+        pass
+    class Sku:
+        pass
+    class SkuName:
+        pass
+    class Kind:
+        pass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

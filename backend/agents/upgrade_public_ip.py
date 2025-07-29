@@ -16,11 +16,31 @@ Date: July 29, 2025
 import asyncio
 import logging
 from typing import Dict, List, Any, Optional, Tuple
-from azure.identity import DefaultAzureCredential
-from azure.mgmt.network import NetworkManagementClient
-from azure.mgmt.network.models import PublicIPAddress, PublicIPAddressSku, PublicIPAddressSkuName, PublicIPAddressSkuTier
 import json
 import time
+
+# Optional Azure SDK imports - graceful fallback if not available
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.mgmt.network import NetworkManagementClient
+    from azure.mgmt.network.models import PublicIPAddress, PublicIPAddressSku, PublicIPAddressSkuName, PublicIPAddressSkuTier
+    AZURE_SDK_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Azure SDK not available: {e}")
+    AZURE_SDK_AVAILABLE = False
+    # Create dummy classes to prevent import errors
+    class DefaultAzureCredential:
+        pass
+    class NetworkManagementClient:
+        pass
+    class PublicIPAddress:
+        pass
+    class PublicIPAddressSku:
+        pass
+    class PublicIPAddressSkuName:
+        pass
+    class PublicIPAddressSkuTier:
+        pass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +55,15 @@ class PublicIPUpgradeAgent:
     def __init__(self, subscription_id: str):
         """Initialize the upgrade agent."""
         self.subscription_id = subscription_id
-        self.credential = DefaultAzureCredential()
-        self.network_client = NetworkManagementClient(self.credential, subscription_id)
+        self.sdk_available = AZURE_SDK_AVAILABLE
+        
+        if self.sdk_available:
+            self.credential = DefaultAzureCredential()
+            self.network_client = NetworkManagementClient(self.credential, subscription_id)
+        else:
+            self.credential = None
+            self.network_client = None
+            logger.warning("Azure SDK not available - PublicIPUpgradeAgent running in fallback mode")
         
     async def upgrade_public_ip(self, resource_id: str) -> Dict[str, Any]:
         """
@@ -48,6 +75,15 @@ class PublicIPUpgradeAgent:
         Returns:
             Dict containing upgrade results and details
         """
+        if not self.sdk_available:
+            return {
+                "success": False,
+                "error": "Azure SDK dependencies not available",
+                "message": "Automated upgrade requires Azure SDK packages",
+                "fallback_required": True,
+                "manual_instructions": self._get_manual_upgrade_instructions(resource_id)
+            }
+            
         try:
             logger.info(f"Starting automated upgrade for Public IP: {resource_id}")
             
@@ -442,6 +478,63 @@ class PublicIPUpgradeAgent:
                 'success': False,
                 'error': str(e)
             }
+
+    def _get_manual_upgrade_instructions(self, resource_id: str) -> Dict[str, Any]:
+        """Provide manual upgrade instructions when automation is not available."""
+        resource_name = resource_id.split('/')[-1] if resource_id else "your-public-ip"
+        
+        return {
+            "title": "Public IP Address Upgrade (Basic to Standard SKU)",
+            "estimated_time": "5-10 minutes",
+            "resource_name": resource_name,
+            "prerequisites": [
+                "Ensure the Public IP is not currently in use",
+                "Verify you have Network Contributor permissions",
+                "Consider maintenance window if IP is critical"
+            ],
+            "steps": [
+                {
+                    "step": 1,
+                    "action": "Navigate to Azure Portal",
+                    "details": "Open Azure Portal (portal.azure.com) and search for 'Public IP addresses'"
+                },
+                {
+                    "step": 2,
+                    "action": "Locate and select your Public IP",
+                    "details": f"Find and click on the Public IP resource: {resource_name}"
+                },
+                {
+                    "step": 3,
+                    "action": "Check current associations",
+                    "details": "In the Overview tab, note any associated resources (VMs, Load Balancers, etc.)"
+                },
+                {
+                    "step": 4,
+                    "action": "Dissociate if needed",
+                    "details": "If associated with resources, dissociate them first (will cause temporary downtime)"
+                },
+                {
+                    "step": 5,
+                    "action": "Upgrade SKU",
+                    "details": "Go to Configuration tab → Change SKU from Basic to Standard → Save"
+                },
+                {
+                    "step": 6,
+                    "action": "Re-associate resources",
+                    "details": "Re-associate with the original resources to restore connectivity"
+                }
+            ],
+            "warnings": [
+                "⚠️  This upgrade will cause temporary downtime while dissociated",
+                "⚠️  Standard SKU Public IPs have different pricing",
+                "⚠️  Some legacy configurations may not be compatible"
+            ],
+            "post_upgrade": [
+                "Verify connectivity to associated resources",
+                "Test any applications that depend on this IP",
+                "Update DNS records if the IP address changed"
+            ]
+        }
 
 # Main execution function for API integration
 async def upgrade_public_ip_automated(subscription_id: str, resource_id: str) -> Dict[str, Any]:

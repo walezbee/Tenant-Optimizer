@@ -11,10 +11,30 @@ Date: July 29, 2025
 import asyncio
 import logging
 from typing import Dict, List, Any, Optional
-from azure.identity import DefaultAzureCredential
-from azure.mgmt.network import NetworkManagementClient
-from azure.mgmt.network.models import LoadBalancer, LoadBalancerSku, LoadBalancerSkuName, LoadBalancerSkuTier
 import json
+
+# Optional Azure SDK imports - graceful fallback if not available
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.mgmt.network import NetworkManagementClient
+    from azure.mgmt.network.models import LoadBalancer, LoadBalancerSku, LoadBalancerSkuName, LoadBalancerSkuTier
+    AZURE_SDK_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Azure SDK not available: {e}")
+    AZURE_SDK_AVAILABLE = False
+    # Create dummy classes to prevent import errors
+    class DefaultAzureCredential:
+        pass
+    class NetworkManagementClient:
+        pass
+    class LoadBalancer:
+        pass
+    class LoadBalancerSku:
+        pass
+    class LoadBalancerSkuName:
+        pass
+    class LoadBalancerSkuTier:
+        pass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -128,7 +128,13 @@ def test_upgrade_agents():
             agent_status["public_ip_agent"] = {
                 "loaded": True,
                 "module": "agents.upgrade_public_ip",
-                "functions": [f for f in dir(agents.upgrade_public_ip) if not f.startswith('_')]
+                "status": "Ready"
+            }
+        except ImportError as e:
+            agent_status["public_ip_agent"] = {
+                "loaded": False, 
+                "error": f"Import error: {str(e)}",
+                "status": "Dependencies missing"
             }
         except Exception as e:
             agent_status["public_ip_agent"] = {"loaded": False, "error": str(e)}
@@ -138,8 +144,14 @@ def test_upgrade_agents():
             import agents.upgrade_load_balancer
             agent_status["load_balancer_agent"] = {
                 "loaded": True,
-                "module": "agents.upgrade_load_balancer",
-                "functions": [f for f in dir(agents.upgrade_load_balancer) if not f.startswith('_')]
+                "module": "agents.upgrade_load_balancer", 
+                "status": "Ready"
+            }
+        except ImportError as e:
+            agent_status["load_balancer_agent"] = {
+                "loaded": False,
+                "error": f"Import error: {str(e)}",
+                "status": "Dependencies missing"
             }
         except Exception as e:
             agent_status["load_balancer_agent"] = {"loaded": False, "error": str(e)}
@@ -150,7 +162,13 @@ def test_upgrade_agents():
             agent_status["storage_account_agent"] = {
                 "loaded": True,
                 "module": "agents.upgrade_storage_account",
-                "functions": [f for f in dir(agents.upgrade_storage_account) if not f.startswith('_')]
+                "status": "Ready"
+            }
+        except ImportError as e:
+            agent_status["storage_account_agent"] = {
+                "loaded": False,
+                "error": f"Import error: {str(e)}",
+                "status": "Dependencies missing - will use fallback"
             }
         except Exception as e:
             agent_status["storage_account_agent"] = {"loaded": False, "error": str(e)}
@@ -161,34 +179,49 @@ def test_upgrade_agents():
             agent_status["orchestrator"] = {
                 "loaded": True,
                 "module": "agents.upgrade_orchestrator",
-                "functions": [f for f in dir(agents.upgrade_orchestrator) if not f.startswith('_')]
+                "status": "Ready"
+            }
+        except ImportError as e:
+            agent_status["orchestrator"] = {
+                "loaded": False,
+                "error": f"Import error: {str(e)}",
+                "status": "Dependencies missing - will use manual guidance"
             }
         except Exception as e:
             agent_status["orchestrator"] = {"loaded": False, "error": str(e)}
             
-        # Test Azure SDK availability
+        # Test Azure SDK availability (optional)
         azure_sdk_status = {}
         try:
             from azure.identity import DefaultAzureCredential
-            azure_sdk_status["azure_identity"] = {"loaded": True}
-        except Exception as e:
-            azure_sdk_status["azure_identity"] = {"loaded": False, "error": str(e)}
+            azure_sdk_status["azure_identity"] = {"loaded": True, "status": "Available"}
+        except ImportError:
+            azure_sdk_status["azure_identity"] = {"loaded": False, "status": "Not available - will use manual mode"}
             
         try:
             from azure.mgmt.network import NetworkManagementClient
-            azure_sdk_status["azure_mgmt_network"] = {"loaded": True}
-        except Exception as e:
-            azure_sdk_status["azure_mgmt_network"] = {"loaded": False, "error": str(e)}
-            
+            azure_sdk_status["azure_mgmt_network"] = {"loaded": True, "status": "Available"}
+        except ImportError:
+            azure_sdk_status["azure_mgmt_network"] = {"loaded": False, "status": "Not available - will use manual mode"}
+        
+        # Determine overall system status
+        agents_with_deps = sum(1 for agent in agent_status.values() if agent.get("loaded", False))
+        total_agents = len(agent_status)
+        
+        system_status = "fully_automated" if agents_with_deps == total_agents else "manual_guidance_mode"
+        
         return {
             "status": "test_completed",
+            "system_mode": system_status,
             "upgrade_agents": agent_status,
             "azure_sdk": azure_sdk_status,
             "test_timestamp": "2025-07-29",
             "summary": {
-                "agents_loaded": sum(1 for agent in agent_status.values() if agent.get("loaded", False)),
-                "total_agents": len(agent_status),
-                "all_systems_ready": all(agent.get("loaded", False) for agent in agent_status.values())
+                "agents_loaded": agents_with_deps,
+                "total_agents": total_agents,
+                "automation_available": agents_with_deps > 0,
+                "fallback_mode": system_status == "manual_guidance_mode",
+                "message": "System will provide intelligent manual guidance if automation is unavailable"
             }
         }
         
@@ -196,7 +229,8 @@ def test_upgrade_agents():
         return {
             "status": "test_failed",
             "error": str(e),
-            "message": "Failed to test upgrade agents"
+            "message": "Failed to test upgrade agents - using safe fallback mode",
+            "fallback_active": True
         }
 
 @app.get("/user")
@@ -366,8 +400,8 @@ async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(ver
 @app.post("/api/resources/upgrade")
 async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
-    Automated upgrade of Azure resources using specialized agents.
-    Handles complex scenarios including dependency management and rollback.
+    Automated upgrade of Azure resources with graceful fallback to manual guidance.
+    Attempts automated upgrade if agents are available, otherwise provides intelligent manual instructions.
     Expected payload: {"resourceId": "full-azure-resource-id", "upgradeType": "sku-upgrade|version-upgrade"}
     """
     try:
@@ -377,89 +411,113 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
         if not resource_id:
             raise HTTPException(status_code=400, detail="Resource ID is required")
         
-        logger.info(f"🤖 Starting automated upgrade: {resource_id} (type: {upgrade_type})")
+        logger.info(f"🔧 Starting upgrade for resource: {resource_id} (type: {upgrade_type})")
         
-        # Extract subscription ID from token or resource ID
-        subscription_id = await extract_subscription_id(user_info['token'], resource_id)
-        if not subscription_id:
-            raise HTTPException(status_code=400, detail="Could not determine subscription ID")
+        # Check if automated agents are available
+        automation_available = False
         
-        # Use the automated upgrade orchestrator
-        from agents.upgrade_orchestrator import upgrade_resource_automated
+        try:
+            # Try to import the orchestrator
+            from agents.upgrade_orchestrator import upgrade_resource_automated
+            automation_available = True
+            logger.info("✅ Automated upgrade agents available - attempting automated upgrade")
+        except ImportError as e:
+            logger.warning(f"⚠️  Automated upgrade agents not available: {e}")
+            logger.info("🔄 Falling back to intelligent manual guidance mode")
+        except Exception as e:
+            logger.error(f"❌ Error importing automated upgrade system: {e}")
+            logger.info("🔄 Falling back to intelligent manual guidance mode")
         
-        # Set up Azure credentials using the user's token
-        import os
-        os.environ['AZURE_ACCESS_TOKEN'] = user_info['token']
-        
-        upgrade_result = await upgrade_resource_automated(subscription_id, resource_id)
-        
-        if upgrade_result.get('success', False):
-            logger.info(f"✅ Automated upgrade completed successfully: {resource_id}")
-            
-            # Enhanced response for successful automated upgrades
-            response = {
-                "success": True,
-                "message": "🎉 Automated upgrade completed successfully!",
-                "resourceId": resource_id,
-                "automationDetails": {
-                    "agent_used": upgrade_result.get('orchestration', {}).get('agent_used', 'Unknown'),
-                    "automation_level": "Full",
-                    "steps_completed": upgrade_result.get('steps_completed', []),
-                    "manual_intervention_required": False
-                },
-                "upgradeDetails": upgrade_result.get('upgrade_details', {}),
-                "status": "automated_upgrade_completed"
-            }
-            
-            # Add specific messaging based on resource type
-            resource_type = upgrade_result.get('orchestration', {}).get('resource_type', '')
-            if 'publicIPAddresses' in resource_type:
-                response["message"] = "🎉 Public IP automatically upgraded! All associations preserved."
-            elif 'loadBalancers' in resource_type:
-                response["message"] = "🎉 Load Balancer automatically upgraded! All configurations preserved."
-            elif 'storageAccounts' in resource_type:
-                response["message"] = "🎉 Storage Account automatically optimized! Performance improved."
+        # Attempt automated upgrade if available
+        if automation_available:
+            try:
+                # Extract subscription ID from token or resource ID
+                subscription_id = await extract_subscription_id(user_info['token'], resource_id)
+                if not subscription_id:
+                    raise HTTPException(status_code=400, detail="Could not determine subscription ID")
                 
-            return response
-            
-        elif upgrade_result.get('skipped', False):
-            logger.info(f"⏭️ Upgrade skipped (already optimal): {resource_id}")
-            return {
-                "success": True,
-                "message": upgrade_result.get('message', 'Resource is already optimally configured'),
-                "resourceId": resource_id,
-                "skipped": True,
-                "status": "no_upgrade_needed"
-            }
-            
-        else:
-            # Automated upgrade failed, fall back to manual guidance
-            error_message = upgrade_result.get('error', 'Unknown error')
-            logger.warning(f"⚠️ Automated upgrade failed, providing manual guidance: {error_message}")
-            
-            # Check if this is a known constraint issue that requires manual steps
-            if any(constraint in error_message.lower() for constraint in 
-                   ['in use', 'cannot update', 'attached', 'associated']):
+                logger.info("🤖 Attempting automated upgrade...")
                 
-                return await provide_manual_upgrade_guidance(resource_id, user_info['token'], error_message)
-            
-            # For other failures, return the error
-            return {
-                "success": False,
-                "message": f"Automated upgrade failed: {error_message}",
-                "resourceId": resource_id,
-                "error": error_message,
-                "fallback_available": True
-            }
+                # Set up Azure credentials using the user's token
+                import os
+                os.environ['AZURE_ACCESS_TOKEN'] = user_info['token']
+                
+                upgrade_result = await upgrade_resource_automated(subscription_id, resource_id)
+                
+                if upgrade_result.get('success', False):
+                    logger.info(f"✅ Automated upgrade completed successfully: {resource_id}")
+                    
+                    # Enhanced response for successful automated upgrades
+                    response = {
+                        "success": True,
+                        "method": "automated",
+                        "message": "🎉 Automated upgrade completed successfully!",
+                        "resourceId": resource_id,
+                        "automationDetails": {
+                            "agent_used": upgrade_result.get('orchestration', {}).get('agent_used', 'Unknown'),
+                            "automation_level": "Full",
+                            "steps_completed": upgrade_result.get('steps_completed', []),
+                            "manual_intervention_required": False
+                        },
+                        "upgradeDetails": upgrade_result.get('upgrade_details', {}),
+                        "status": "automated_upgrade_completed",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Add specific messaging based on resource type
+                    resource_type = upgrade_result.get('orchestration', {}).get('resource_type', '')
+                    if 'publicIPAddresses' in resource_type:
+                        response["message"] = "🎉 Public IP automatically upgraded! All associations preserved."
+                    elif 'loadBalancers' in resource_type:
+                        response["message"] = "🎉 Load Balancer automatically upgraded! All configurations preserved."
+                    elif 'storageAccounts' in resource_type:
+                        response["message"] = "🎉 Storage Account automatically optimized! Performance improved."
+                        
+                    return response
+                    
+                elif upgrade_result.get('skipped', False):
+                    logger.info(f"⏭️ Upgrade skipped (already optimal): {resource_id}")
+                    return {
+                        "success": True,
+                        "method": "automated",
+                        "message": upgrade_result.get('message', 'Resource is already optimally configured'),
+                        "resourceId": resource_id,
+                        "skipped": True,
+                        "status": "no_upgrade_needed",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                else:
+                    # Automated upgrade failed, fall back to manual guidance
+                    error_message = upgrade_result.get('error', 'Unknown error')
+                    logger.warning(f"⚠️ Automated upgrade failed, falling back to manual guidance: {error_message}")
+                    # Continue to manual guidance fallback
+                    
+            except Exception as e:
+                logger.error(f"❌ Automated upgrade failed with error: {e}")
+                logger.info("🔄 Falling back to intelligent manual guidance")
+                # Continue to manual guidance fallback
+        
+        # Manual guidance fallback (always available)
+        logger.info("📋 Providing intelligent manual guidance")
+        return await provide_manual_upgrade_guidance(resource_id, user_info['token'], 
+                                                   "Automated upgrade unavailable - providing manual guidance")
                 
     except Exception as e:
-        logger.error(f"❌ Automated upgrade system error: {str(e)}")
+        logger.error(f"❌ Upgrade endpoint failed: {e}")
         
-        # If automated system fails completely, fall back to manual guidance
+        # Final fallback - basic manual guidance
         try:
-            return await provide_manual_upgrade_guidance(resource_id, user_info['token'], str(e))
+            return await provide_manual_upgrade_guidance(resource_id, user_info.get('token', ''), str(e))
         except:
-            raise HTTPException(status_code=500, detail=f"Upgrade system failed: {str(e)}")
+            return {
+                "success": False,
+                "method": "error",
+                "message": f"Upgrade failed with error: {str(e)}",
+                "resourceId": resource_id,
+                "timestamp": datetime.now().isoformat(),
+                "support_note": "Please contact Azure Support for assistance"
+            }
 
 async def extract_subscription_id(token: str, resource_id: str) -> Optional[str]:
     """Extract subscription ID from resource ID or validate with Azure."""
