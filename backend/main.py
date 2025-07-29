@@ -93,7 +93,12 @@ if os.path.exists(STATIC_DIR):
 @app.get("/api/test")
 def api_test():
     """Test endpoint to verify API routing works."""
-    return {"message": "API routing works!", "timestamp": "2025-07-28"}
+    return {"message": "API routing works!", "timestamp": "2025-07-29", "routing": "fixed"}
+
+@app.get("/direct-test")
+def direct_test():
+    """Direct test endpoint without API prefix."""
+    return {"message": "Direct endpoint works!", "timestamp": "2025-07-29", "deployment": "active"}
 
 @app.get("/health")
 def health_check():
@@ -101,9 +106,9 @@ def health_check():
     return {
         "status": "ok",
         "message": "Tenant Optimizer API is running",
-        "version": "1.0.0",
-        "timestamp": "2025-07-28-19:10:00",
-        "api_prefix": "enabled"
+        "version": "1.0.1",
+        "timestamp": "2025-07-29-auth-fix",
+        "deployment_test": "active"
     }
 
 @app.get("/user")
