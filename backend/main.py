@@ -283,7 +283,7 @@ async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(ver
 @app.post("/api/resources/upgrade")
 async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
-    Upgrade a deprecated Azure resource.
+    Upgrade a deprecated Azure resource with intelligent handling of complex scenarios.
     Expected payload: {"resourceId": "full-azure-resource-id", "upgradeType": "sku-upgrade|version-upgrade"}
     """
     try:
@@ -310,61 +310,194 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
             
             resource_data = response.json()
             resource_type = resource_data.get("type", "").lower()
+            resource_name = resource_data.get("name", "")
             
-            # Determine upgrade configuration based on resource type
-            upgraded_properties = resource_data.copy()
+            logger.info(f"🔍 Resource type: {resource_type}, Name: {resource_name}")
             
             if "publicipaddress" in resource_type:
-                # Upgrade Basic SKU to Standard SKU
-                if upgraded_properties.get("sku", {}).get("name", "").lower() == "basic":
-                    upgraded_properties["sku"]["name"] = "Standard"
-                    logger.info("🔄 Upgrading Public IP from Basic to Standard SKU")
-                    
+                return await upgrade_public_ip(client, resource_id, resource_data, headers, logger)
             elif "loadbalancer" in resource_type:
-                # Upgrade Basic SKU to Standard SKU
-                if upgraded_properties.get("sku", {}).get("name", "").lower() == "basic":
-                    upgraded_properties["sku"]["name"] = "Standard"
-                    logger.info("🔄 Upgrading Load Balancer from Basic to Standard SKU")
-                    
+                return await upgrade_load_balancer(client, resource_id, resource_data, headers, logger)
             elif "storageaccount" in resource_type:
-                # Upgrade to StorageV2
-                if upgraded_properties.get("kind", "").lower() in ["storage", "storagev1"]:
-                    upgraded_properties["kind"] = "StorageV2"
-                    logger.info("🔄 Upgrading Storage Account to v2")
-                    
+                return await upgrade_storage_account(client, resource_id, resource_data, headers, logger)
             else:
-                # Generic upgrade - this is a placeholder for complex upgrades
                 logger.warning(f"⚠️ Upgrade not implemented for resource type: {resource_type}")
                 return {
                     "success": False,
                     "message": f"Upgrade not yet implemented for {resource_type}. Please upgrade manually using Azure Portal.",
                     "resourceId": resource_id,
                     "resourceType": resource_type,
-                    "manualUpgradeRequired": True
+                    "manualUpgradeRequired": True,
+                    "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}"
                 }
-            
-            # Apply the upgrade using PUT request
-            put_response = await client.put(url, headers=headers, json=upgraded_properties)
-            
-            if put_response.status_code == 200 or put_response.status_code == 201:
-                logger.info(f"✅ Resource upgrade completed successfully")
-                return {
-                    "success": True,
-                    "message": "Resource upgrade completed successfully",
-                    "resourceId": resource_id,
-                    "resourceType": resource_type,
-                    "status": "upgraded"
-                }
-            else:
-                logger.error(f"❌ Upgrade failed: {put_response.status_code} - {put_response.text}")
-                raise HTTPException(
-                    status_code=put_response.status_code,
-                    detail=f"Failed to upgrade resource: {put_response.text}"
-                )
                 
     except Exception as e:
         logger.error(f"❌ Resource upgrade error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upgrade failed: {str(e)}")
+
+async def upgrade_public_ip(client, resource_id, resource_data, headers, logger):
+    """
+    Upgrade Public IP from Basic to Standard SKU.
+    Handles the scenario where the IP is in use by checking associations.
+    """
+    try:
+        current_sku = resource_data.get("sku", {}).get("name", "").lower()
+        if current_sku != "basic":
+            return {
+                "success": False,
+                "message": f"Public IP is already using {current_sku.title()} SKU, no upgrade needed.",
+                "resourceId": resource_id,
+                "alreadyUpgraded": True
+            }
+        
+        # Check if the Public IP is currently in use
+        ip_config = resource_data.get("properties", {}).get("ipConfiguration")
+        if ip_config:
+            logger.warning(f"⚠️ Public IP is in use by: {ip_config.get('id', 'unknown resource')}")
+            
+            return {
+                "success": False,
+                "message": "Public IP cannot be upgraded while in use. To upgrade this Public IP:\n\n1. Dissociate it from the attached resource (Network Interface, Load Balancer, etc.)\n2. Upgrade the SKU to Standard\n3. Re-associate it with the resource\n\nAlternatively, create a new Standard SKU Public IP and replace the existing one.",
+                "resourceId": resource_id,
+                "resourceType": "microsoft.network/publicipaddresses",
+                "manualUpgradeRequired": True,
+                "upgradeSteps": [
+                    "Navigate to Azure Portal",
+                    "Open the Public IP resource", 
+                    "Dissociate from attached resources",
+                    "Change SKU from Basic to Standard",
+                    "Re-associate with resources"
+                ],
+                "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}",
+                "attachedTo": ip_config.get('id', 'unknown resource')
+            }
+        
+        # If not in use, proceed with direct upgrade
+        upgraded_data = resource_data.copy()
+        upgraded_data["sku"]["name"] = "Standard"
+        
+        # Use the correct API version for Public IP addresses
+        api_url = f"https://management.azure.com{resource_id}?api-version=2023-04-01"
+        
+        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
+        
+        if put_response.status_code in [200, 201]:
+            logger.info(f"✅ Public IP upgraded from Basic to Standard SKU successfully")
+            return {
+                "success": True,
+                "message": "Public IP upgraded from Basic to Standard SKU successfully",
+                "resourceId": resource_id,
+                "resourceType": "microsoft.network/publicipaddresses",
+                "status": "upgraded",
+                "upgradedFrom": "Basic SKU",
+                "upgradedTo": "Standard SKU"
+            }
+        else:
+            error_detail = put_response.text
+            logger.error(f"❌ Public IP upgrade failed: {put_response.status_code} - {error_detail}")
+            
+            # Parse Azure error for better user feedback
+            if "PublicIPAddressInUseCannotUpdate" in error_detail:
+                return {
+                    "success": False,
+                    "message": "Public IP cannot be upgraded because it's currently in use. Please dissociate it from attached resources first, then try upgrading again.",
+                    "resourceId": resource_id,
+                    "manualUpgradeRequired": True,
+                    "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}"
+                }
+            
+            raise HTTPException(
+                status_code=put_response.status_code,
+                detail=f"Failed to upgrade Public IP: {error_detail}"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Public IP upgrade error: {str(e)}")
+        raise e
+
+async def upgrade_load_balancer(client, resource_id, resource_data, headers, logger):
+    """
+    Upgrade Load Balancer from Basic to Standard SKU.
+    """
+    try:
+        current_sku = resource_data.get("sku", {}).get("name", "").lower()
+        if current_sku != "basic":
+            return {
+                "success": False,
+                "message": f"Load Balancer is already using {current_sku.title()} SKU, no upgrade needed.",
+                "resourceId": resource_id,
+                "alreadyUpgraded": True
+            }
+        
+        upgraded_data = resource_data.copy()
+        upgraded_data["sku"]["name"] = "Standard"
+        
+        api_url = f"https://management.azure.com{resource_id}?api-version=2023-04-01"
+        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
+        
+        if put_response.status_code in [200, 201]:
+            logger.info(f"✅ Load Balancer upgraded from Basic to Standard SKU successfully")
+            return {
+                "success": True,
+                "message": "Load Balancer upgraded from Basic to Standard SKU successfully",
+                "resourceId": resource_id,
+                "resourceType": "microsoft.network/loadbalancers",
+                "status": "upgraded",
+                "upgradedFrom": "Basic SKU",
+                "upgradedTo": "Standard SKU"
+            }
+        else:
+            logger.error(f"❌ Load Balancer upgrade failed: {put_response.status_code} - {put_response.text}")
+            raise HTTPException(
+                status_code=put_response.status_code,
+                detail=f"Failed to upgrade Load Balancer: {put_response.text}"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Load Balancer upgrade error: {str(e)}")
+        raise e
+
+async def upgrade_storage_account(client, resource_id, resource_data, headers, logger):
+    """
+    Upgrade Storage Account from v1 to v2.
+    """
+    try:
+        current_kind = resource_data.get("kind", "").lower()
+        if current_kind not in ["storage", "storagev1"]:
+            return {
+                "success": False,
+                "message": f"Storage Account is already using {current_kind} kind, no upgrade needed.",
+                "resourceId": resource_id,
+                "alreadyUpgraded": True
+            }
+        
+        upgraded_data = resource_data.copy()
+        upgraded_data["kind"] = "StorageV2"
+        
+        api_url = f"https://management.azure.com{resource_id}?api-version=2023-01-01"
+        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
+        
+        if put_response.status_code in [200, 201]:
+            logger.info(f"✅ Storage Account upgraded to v2 successfully")
+            return {
+                "success": True,
+                "message": "Storage Account upgraded to v2 successfully",
+                "resourceId": resource_id,
+                "resourceType": "microsoft.storage/storageaccounts",
+                "status": "upgraded",
+                "upgradedFrom": current_kind,
+                "upgradedTo": "StorageV2"
+            }
+        else:
+            logger.error(f"❌ Storage Account upgrade failed: {put_response.status_code} - {put_response.text}")
+            raise HTTPException(
+                status_code=put_response.status_code,
+                detail=f"Failed to upgrade Storage Account: {put_response.text}"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Storage Account upgrade error: {str(e)}")
+        raise e
 
 @app.get("/")
 def serve_index():

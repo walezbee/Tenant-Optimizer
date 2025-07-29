@@ -471,7 +471,41 @@ function App() {
       }
 
       if (data.manualUpgradeRequired) {
-        alert(`Manual upgrade required!\n\nResource: ${resourceId}\nReason: ${data.message}\n\nPlease use Azure Portal to complete the upgrade.`);
+        // Show detailed manual upgrade instructions
+        let message = `Manual upgrade required!\n\nResource: ${resourceId}\n\n${data.message}`;
+        
+        if (data.upgradeSteps) {
+          message += "\n\nUpgrade Steps:";
+          data.upgradeSteps.forEach((step: string, index: number) => {
+            message += `\n${index + 1}. ${step}`;
+          });
+        }
+        
+        if (data.attachedTo) {
+          message += `\n\nCurrently attached to: ${data.attachedTo}`;
+        }
+        
+        if (data.azurePortalUrl) {
+          message += `\n\nAzure Portal Link: ${data.azurePortalUrl}`;
+        }
+        
+        alert(message);
+        
+        // For Public IPs that are in use, show a special message
+        if (data.attachedTo) {
+          const shouldOpenPortal = confirm("Would you like to open Azure Portal to perform the manual upgrade?");
+          if (shouldOpenPortal && data.azurePortalUrl) {
+            window.open(data.azurePortalUrl, '_blank');
+          }
+        }
+      } else if (data.alreadyUpgraded) {
+        alert(`Resource is already upgraded!\n\nResource: ${resourceId}\n${data.message}`);
+        
+        // Remove from deprecated results since it's already upgraded
+        setScanResults(prev => ({
+          ...prev,
+          deprecated: prev.deprecated?.filter(r => r.resourceId !== resourceId) || []
+        }));
       } else {
         // Remove the upgraded resource from deprecated results
         setScanResults(prev => ({
@@ -479,7 +513,13 @@ function App() {
           deprecated: prev.deprecated?.filter(r => r.resourceId !== resourceId) || []
         }));
 
-        alert(`Resource upgrade completed successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
+        let successMessage = `Resource upgrade completed successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`;
+        
+        if (data.upgradedFrom && data.upgradedTo) {
+          successMessage += `\nUpgraded from: ${data.upgradedFrom}\nUpgraded to: ${data.upgradedTo}`;
+        }
+        
+        alert(successMessage);
       }
     } catch (e: any) {
       setError(`Error upgrading resource: ${e.message || e.toString()}`);
