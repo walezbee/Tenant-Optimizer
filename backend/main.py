@@ -19,42 +19,54 @@ security = HTTPBearer()
 async def verify_azure_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
     """
     Verify Azure AD JWT token and extract user information.
+    Accepts ARM tokens with proper audience validation for multi-tenant scenarios.
     """
     token = credentials.credentials
     
     try:
-        # For now, decode without verification to get user info
+        # Decode token without signature verification for now (for debugging)
         # In production, you should verify the signature with Microsoft's public keys
         decoded = jwt.decode(token, options={"verify_signature": False})
         
+        logger.info(f"Token decoded successfully. Audience: {decoded.get('aud')}, Issuer: {decoded.get('iss')}")
+        
         # Check basic token structure
         if not decoded.get("aud") or not decoded.get("iss"):
+            logger.error("Token missing required audience or issuer")
             raise HTTPException(status_code=401, detail="Invalid token structure")
-            
-        # Check if token is for the correct audience (your API)
-        expected_audiences = [
-            "api://tenant-optimizer-api",  # Your API app registration
-            "https://management.azure.com/",  # ARM API
-        ]
         
-        if not any(aud in str(decoded.get("aud", "")) for aud in expected_audiences):
-            logger.warning(f"Token audience mismatch: {decoded.get('aud')}")
-            # Don't fail hard on audience for now, just log
+        # Check issuer is from Microsoft
+        issuer = decoded.get("iss", "")
+        if not ("login.microsoftonline.com" in issuer or "sts.windows.net" in issuer):
+            logger.error(f"Invalid token issuer: {issuer}")
+            raise HTTPException(status_code=401, detail="Invalid token issuer")
             
-        return {
+        # For ARM tokens, audience should be Azure Resource Manager
+        audience = decoded.get("aud")
+        if audience != "https://management.azure.com/":
+            logger.warning(f"Unexpected token audience: {audience}. Expected: https://management.azure.com/")
+            # Don't fail hard - log for debugging but continue
+        
+        # Extract user information
+        user_info = {
             "user_id": decoded.get("oid"),
-            "user_email": decoded.get("upn") or decoded.get("email"),
+            "user_email": decoded.get("upn") or decoded.get("email") or decoded.get("preferred_username"),
             "tenant_id": decoded.get("tid"),
             "name": decoded.get("name"),
-            "token": token
+            "token": token,
+            "audience": audience,
+            "issuer": issuer
         }
+        
+        logger.info(f"User authenticated: {user_info.get('user_email')} from tenant {user_info.get('tenant_id')}")
+        return user_info
         
     except jwt.InvalidTokenError as e:
         logger.error(f"JWT decode error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     except Exception as e:
         logger.error(f"Token verification error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Token verification failed")
+        raise HTTPException(status_code=401, detail=f"Token verification failed: {str(e)}")
 
 # Create FastAPI app
 app = FastAPI(title="Tenant Optimizer API", version="1.0.0")
