@@ -1,0 +1,22 @@
+<step title="Incoming Request" date="2025-07-25T16:06:14.143" instance="4e34fd" url="/api/publish?type=zip" method="POST" type="request" pid="767,1,49" Accept="*/*" Host="tenant-optimizer-web.scm.azurewebsites.net" User-Agent="AZURECLI/2.75.0 (DEB)" Accept-Encoding="gzip, deflate" Authorization="Bas..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=4e34fd1dcf287fe6e10b93d54f0687cf933ff0e6150f35901216ccdf393ab071; ARRAffinitySameSite=4e34fd1dcf287fe6e10b93d54f0687cf933ff0e6150f35901216ccdf393ab071" Content-Length="53118" x-ms-client-request-id="42d846b8-6971-11f0-ab6d-6045bdeb9528" x-ms-artifact-checksum="a41d0a25391f6e71bd1bd3587c94641d629ecb84613135779d602fca1eb19c95" X-ARR-LOG-ID="42d846b8-6971-11f0-ab6d-6045bdeb9528" CLIENT-IP="20.55.15.102:28728" X-SITE-DEPLOYMENT-ID="tenant-optimizer-web" WAS-DEFAULT-HOSTNAME="tenant-optimizer-web.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip" X-Client-IP="20.55.15.102" X-Client-Port="28728" >
+  <step title="OneDeploy" date="2025-07-25T16:06:14.188" >
+    <step title="Starting PushDeployAsync" date="2025-07-25T16:06:14.197" /><!-- duration: 2ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/54fbef50-f8c2-47cb-ba51-d4f385c833ca.zip" date="2025-07-25T16:06:14.203" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/54fbef50-f8c2-47cb-ba51-d4f385c833ca.zip" date="2025-07-25T16:06:14.205" /><!-- duration: 2ms -->
+    </step><!-- duration: 70ms -->
+    <step title="Attempting to fetch target branch HEAD" date="2025-07-25T16:06:14.283" /><!-- duration: 2ms -->
+    <step title="Acquiring Deployment Lock" date="2025-07-25T16:06:14.288" /><!-- duration: 6ms -->
+    <step title="Acquired Deployment Lock" date="2025-07-25T16:06:14.356" /><!-- duration: 2ms -->
+    <step title="Performing fetch based deployment" date="2025-07-25T16:06:14.363" >
+      <step title="Creating temporary deployment" date="2025-07-25T16:06:14.370" /><!-- duration: 99ms -->
+      <step title="Releasing Deployment Lock - There is NO LOCK HELD | ERROR" date="2025-07-25T16:06:15.662" /><!-- duration: 8ms -->
+      <step title="Cleaning up temp folders from previous zip deployments and extracting pushed zip file /tmp/zipdeploy/54fbef50-f8c2-47cb-ba51-d4f385c833ca.zip (0.05 MB) to /tmp/zipdeploy/extracted" date="2025-07-25T16:06:15.710" >
+        <step title="ChmodRecursive Process exited with total time taken in ms: 42" date="2025-07-25T16:06:15.812" /><!-- duration: 3ms -->
+      </step><!-- duration: 107ms -->
+      <step title="None repository commit" date="2025-07-25T16:06:15.821" >
+        <step title="Commit id: 6404cef3-615a-4d3d-987c-c68378159c26" date="2025-07-25T16:06:15.824" Message="OneDeploy" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 33ms -->
+      </step><!-- duration: 46ms -->
+      <step title="Deployment timer started" date="2025-07-25T16:06:17.876" >
+        <step title="Error occurred" date="2025-07-25T16:06:17.880" type="error" text="Deployment has been stopped due to SCM container restart. The restart can happen due to a management operation on site. Do not perform a management operation and a deployment operation in quick succession. Adding a small delay can help avoid any conflicts." /><!-- duration: 2ms -->
+        <step title="DeploymentManager.Deploy(id:6404cef3-615a-4d3d-987c-c68378159c26)" date="2025-07-25T16:06:17.977" >
+          <step title="Collecting changeset information" date="2025-07-25T16:06:17.985" 

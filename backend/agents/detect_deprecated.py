@@ -22,7 +22,7 @@ async def detect_deprecated_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Comprehensive query for resources that might be deprecated/retired
+    # Query for resources that might be deprecated/retired
     query = """
     Resources
     | where type in~ (
@@ -32,40 +32,14 @@ async def detect_deprecated_resources(user_token, subscriptions):
         'microsoft.network/applicationgateways', 
         'microsoft.storage/storageaccounts',
         'microsoft.sql/servers',
-        'microsoft.sql/servers/databases',
         'microsoft.compute/disks',
         'microsoft.web/sites',
-        'microsoft.web/serverfarms',
         'microsoft.keyvault/vaults',
-        'microsoft.containerservice/managedclusters',
-        'microsoft.network/virtualnetworks',
-        'microsoft.insights/components',
-        'microsoft.automation/automationaccounts',
-        'microsoft.compute/availabilitysets',
-        'microsoft.network/networksecuritygroups',
-        'microsoft.network/routetables',
-        'microsoft.recovery/vaults'
-    )
-    | project id, name, type, location, resourceGroup, sku, kind, properties, tags
-    | limit 500
-        'microsoft.compute/availabilitysets',
-        'microsoft.network/networksecuritygroups',
-        'microsoft.compute/virtualmachinescalesets',
-        'microsoft.containerservice/managedclusters',
-        'microsoft.network/virtualnetworks',
-        'microsoft.keyvault/vaults',
-        'microsoft.insights/components',
-        'microsoft.web/sites',
-        'microsoft.cache/redis',
-        'microsoft.servicebus/namespaces',
-        'microsoft.eventhub/namespaces'
+        'microsoft.containerservice/managedclusters'
     )
     | extend skuName = sku.name, skuTier = sku.tier
-    | extend apiVersion = properties.apiVersion
-    | extend vmSize = properties.hardwareProfile.vmSize
-    | extend osVersion = properties.storageProfile.imageReference.version
-    | project id, name, type, kind, location, resourceGroup, skuName, skuTier, apiVersion, vmSize, osVersion, sku, tags, properties
-    | limit 150
+    | project id, name, type, kind, location, resourceGroup, skuName, skuTier, sku, tags, properties
+    | limit 100
     """
     
     payload = {

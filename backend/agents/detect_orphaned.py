@@ -22,70 +22,31 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Comprehensive query for ALL types of orphaned resources
+    # Query for orphaned managed disks and public IPs (most common orphaned resources)
     query = """
-    // Orphaned Managed Disks (not attached to any VM)
     Resources
     | where type =~ 'microsoft.compute/disks'
     | where isnull(managedBy) or managedBy == ''
-    | extend ResourceType = 'Orphaned Disk', Cost = sku.tier
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    | extend ResourceType = 'Orphaned Disk'
+    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
     
     union
     
-    // Orphaned Public IP Addresses (not associated with any resource)
     (Resources
     | where type =~ 'microsoft.network/publicipaddresses'
     | where isnull(properties.ipConfiguration) or properties.ipConfiguration == ''
-    | extend ResourceType = 'Orphaned Public IP', Cost = sku.name
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    | extend ResourceType = 'Orphaned Public IP'
+    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
     
     union
     
-    // Orphaned Network Interfaces (not attached to any VM)
     (Resources
     | where type =~ 'microsoft.network/networkinterfaces'
     | where isnull(properties.virtualMachine) or properties.virtualMachine == ''
-    | extend ResourceType = 'Orphaned Network Interface', Cost = 'Standard'
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
+    | extend ResourceType = 'Orphaned Network Interface'
+    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
     
-    union
-    
-    // Orphaned Network Security Groups (not associated with any subnet or NIC)
-    (Resources
-    | where type =~ 'microsoft.network/networksecuritygroups'
-    | where array_length(properties.subnets) == 0 and array_length(properties.networkInterfaces) == 0
-    | extend ResourceType = 'Orphaned Network Security Group', Cost = 'Free'
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
-    
-    union
-    
-    // Orphaned Load Balancers (no backend pools or rules)
-    (Resources
-    | where type =~ 'microsoft.network/loadbalancers'
-    | where array_length(properties.backendAddressPools) == 0 or array_length(properties.loadBalancingRules) == 0
-    | extend ResourceType = 'Orphaned Load Balancer', Cost = sku.name
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
-    
-    union
-    
-    // Orphaned Application Gateways (no backend pools)
-    (Resources
-    | where type =~ 'microsoft.network/applicationgateways'
-    | where array_length(properties.backendAddressPools) == 0
-    | extend ResourceType = 'Orphaned Application Gateway', Cost = sku.name
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
-    
-    union
-    
-    // Orphaned Storage Accounts (empty or unused)
-    (Resources
-    | where type =~ 'microsoft.storage/storageaccounts'
-    | where tags['usage'] == 'unused' or tags['status'] == 'empty'
-    | extend ResourceType = 'Potentially Orphaned Storage Account', Cost = sku.name
-    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties)
-    
-    | limit 200
+    | limit 100
     """
     
     // Orphaned Public IP Addresses (not associated with any resource)
