@@ -95,10 +95,10 @@ async def detect_deprecated_resources(user_token, subscriptions):
         logger.info("✅ No resources found to analyze")
         return []
 
-    # Check if OpenAI API key is available
+    # Check if OpenAI API key is available and valid
     openai_key = os.getenv("OPENAI_KEY")
-    if not openai_key:
-        logger.warning("⚠️ OpenAI API key not found, returning basic analysis")
+    if not openai_key or not openai_key.startswith("sk-"):
+        logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
         # Return basic structured data without AI analysis
         deprecated_resources = []
         for resource in resources:

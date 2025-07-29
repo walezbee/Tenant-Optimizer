@@ -96,10 +96,10 @@ async def detect_orphaned_resources(user_token, subscriptions):
         logger.info("✅ No orphaned resources found")
         return []
 
-    # Check if OpenAI API key is available
+    # Check if OpenAI API key is available and valid
     openai_key = os.getenv("OPENAI_KEY")
-    if not openai_key:
-        logger.warning("⚠️ OpenAI API key not found, returning raw data")
+    if not openai_key or not openai_key.startswith("sk-"):
+        logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
         # Return structured data without AI analysis
         return [
             {
@@ -108,8 +108,8 @@ async def detect_orphaned_resources(user_token, subscriptions):
                 "resourceType": disk.get("type", ""),
                 "location": disk.get("location", ""),
                 "resourceGroup": disk.get("resourceGroup", ""),
-                "issue": "Potentially orphaned disk (not attached to any VM)",
-                "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs."
+                "issue": "Potentially orphaned disk (not attached to any VM) - Basic analysis without AI",
+                "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs. Note: Advanced AI analysis unavailable - check OpenAI API key configuration."
             }
             for disk in disks
         ]
@@ -153,15 +153,15 @@ async def detect_orphaned_resources(user_token, subscriptions):
                     "resourceType": disk.get("type", ""),
                     "location": disk.get("location", ""),
                     "resourceGroup": disk.get("resourceGroup", ""),
-                    "issue": "AI analysis unavailable - Potentially orphaned disk",
-                    "recommendation": "Manual review required. Check if disk is attached to any VM."
+                    "issue": "Potentially orphaned disk (AI analysis failed)",
+                    "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs. Note: AI analysis failed - basic recommendation provided."
                 }
                 for disk in disks
             ]
             
     except Exception as e:
         logger.error(f"❌ OpenAI API error: {str(e)}")
-        # Return fallback structured data
+        # Return fallback data when OpenAI fails
         return [
             {
                 "resourceId": disk.get("id", ""),
@@ -169,8 +169,8 @@ async def detect_orphaned_resources(user_token, subscriptions):
                 "resourceType": disk.get("type", ""),
                 "location": disk.get("location", ""),
                 "resourceGroup": disk.get("resourceGroup", ""),
-                "issue": f"AI analysis failed: {str(e)[:100]}...",
-                "recommendation": "Manual review required. Check if disk is attached to any VM."
+                "issue": "Potentially orphaned disk (AI analysis failed)",
+                "recommendation": f"Review if this disk is still needed. If not, consider deleting to save costs. Note: AI analysis failed due to: {str(e)}"
             }
             for disk in disks
         ]
