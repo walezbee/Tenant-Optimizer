@@ -29,16 +29,48 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [msalReady, setMsalReady] = useState(false);
 
-  // Initialize MSAL on startup
+  // Initialize MSAL on startup and handle redirects
   useEffect(() => {
-    msalInstance
-      .initialize()
-      .then(() => setMsalReady(true))
-      .catch((e) =>
-        setError(
-          "MSAL initialization failed: " + (e.message || e.toString())
-        )
-      );
+    const initializeMsal = async () => {
+      try {
+        await msalInstance.initialize();
+        console.log("✅ MSAL initialized");
+        
+        // Handle redirect response (from login or token acquisition)
+        const response = await msalInstance.handleRedirectPromise();
+        
+        if (response) {
+          console.log("✅ Redirect response received:", response);
+          
+          if (response.account) {
+            setAccount(response.account);
+            console.log("✅ Account set from redirect:", response.account.username);
+          }
+          
+          if (response.accessToken) {
+            // Check what kind of token we got
+            if (response.scopes?.includes("https://management.azure.com/user_impersonation")) {
+              setArmToken(response.accessToken);
+              console.log("✅ ARM token set from redirect");
+            }
+          }
+        } else {
+          // No redirect response, check if user is already signed in
+          const accounts = msalInstance.getAllAccounts();
+          if (accounts.length > 0) {
+            setAccount(accounts[0]);
+            console.log("✅ Existing account found:", accounts[0].username);
+          }
+        }
+        
+        setMsalReady(true);
+      } catch (e: any) {
+        console.error("MSAL initialization failed:", e);
+        setError("MSAL initialization failed: " + (e.message || e.toString()));
+      }
+    };
+    
+    initializeMsal();
   }, []);
 
   const handleLogin = async () => {
@@ -52,57 +84,44 @@ function App() {
     setLoading(true);
     
     try {
-      // 1. Login with basic scopes first
-      const loginResponse = await msalInstance.loginPopup(loginRequest);
-      setAccount(loginResponse.account);
-
-      // 2. Get API token for backend
-      try {
-        const apiTokenResp = await msalInstance.acquireTokenSilent({
-          account: loginResponse.account,
-          scopes: apiRequest.scopes,
-        });
-        setApiToken(apiTokenResp.accessToken);
-      } catch (apiError: any) {
-        console.warn("Could not get API token silently:", apiError);
-        // Try interactive consent for API
-        try {
-          const apiTokenResp = await msalInstance.acquireTokenPopup({
-            account: loginResponse.account,
-            scopes: apiRequest.scopes,
-          });
-          setApiToken(apiTokenResp.accessToken);
-        } catch (apiInteractiveError: any) {
-          console.error("API token interactive consent failed:", apiInteractiveError);
-          // Continue without API token for now
-        }
+      // Check if user is already signed in
+      const accounts = msalInstance.getAllAccounts();
+      
+      if (accounts.length === 0) {
+        // No user signed in, redirect to login
+        console.log("🔐 No user signed in, redirecting to login...");
+        await msalInstance.loginRedirect(loginRequest);
+        return; // This will redirect and reload the page
       }
-
-      // 3. Get ARM token (separate call, after login!)
+      
+      // User is already signed in, get ARM token
+      const account = accounts[0];
+      setAccount(account);
+      console.log("✅ User already signed in:", account.username);
+      
+      // Get ARM token
       try {
+        console.log("🔑 Getting ARM token...");
         const armTokenResp = await msalInstance.acquireTokenSilent({
-          account: loginResponse.account,
+          account: account,
           scopes: armRequest.scopes,
         });
         setArmToken(armTokenResp.accessToken);
+        console.log("✅ ARM token acquired successfully");
       } catch (armError: any) {
-        // Interactive consent if needed
+        console.log("⚠️ Silent ARM token failed, trying redirect:", armError.errorCode);
+        // Use redirect instead of popup to avoid blocking
         if (
           armError.errorCode === "interaction_required" ||
           armError.errorCode === "consent_required" ||
           armError.errorCode === "login_required" ||
           armError.errorCode === "admin_consent_required"
         ) {
-          try {
-            const armTokenResp = await msalInstance.acquireTokenPopup({
-              account: loginResponse.account,
-              ...armRequest // Use all settings from armRequest config including scopes
-            });
-            setArmToken(armTokenResp.accessToken);
-          } catch (armInteractiveError: any) {
-            console.error("ARM token interactive consent failed:", armInteractiveError);
-            throw armInteractiveError;
-          }
+          await msalInstance.acquireTokenRedirect({
+            account: account,
+            scopes: armRequest.scopes,
+          });
+          return; // This will redirect and reload the page
         } else {
           throw armError;
         }
