@@ -120,6 +120,15 @@ function App() {
     initializeMsal();
   }, []);
 
+  // Auto-fetch subscriptions when ARM token becomes available
+  useEffect(() => {
+    if (armToken) {
+      console.log("🔄 ARM token available, auto-fetching subscriptions...");
+      fetchSubscriptions();
+    }
+    // eslint-disable-next-line
+  }, [armToken]);
+
   const handleLogin = async () => {
     if (!msalReady) {
       setError(
@@ -176,7 +185,7 @@ function App() {
       setArmToken(armTokenResp.accessToken);
       return armTokenResp.accessToken;
     } catch (armError: any) {
-      console.log("⚠️ Silent ARM token failed, trying redirect:", armError.errorCode);
+      console.log("⚠️ Silent ARM token failed:", armError.errorCode);
       console.log("⚠️ ARM error details:", armError);
       
       // Use redirect instead of popup to avoid blocking
@@ -186,14 +195,31 @@ function App() {
         armError.errorCode === "login_required" ||
         armError.errorCode === "admin_consent_required"
       ) {
-        console.log("🔄 Redirecting for ARM token...");
+        console.log("🔄 Redirecting for ARM token consent...");
+        setError("Redirecting to Azure for permissions. Please accept the Azure Resource Manager access consent.");
+        
+        // Use a more explicit consent request
         await msalInstance.acquireTokenRedirect({
           account: account,
           scopes: armRequest.scopes,
+          prompt: "consent", // Force consent screen
+          extraQueryParameters: {
+            "response_mode": "fragment"
+          }
         });
         return null; // This will redirect and reload the page
       } else {
-        throw armError;
+        // For other errors, provide more specific guidance
+        const errorMessage = armError.errorMessage || armError.message || armError.toString();
+        console.error("❌ ARM token acquisition failed:", errorMessage);
+        
+        if (armError.errorCode === "user_cancelled") {
+          throw new Error("Permission request was cancelled. Azure Resource Manager access is required to view subscriptions.");
+        } else if (armError.errorCode === "access_denied") {
+          throw new Error("Access denied. Please contact your Azure administrator to grant Azure Resource Manager permissions.");
+        } else {
+          throw new Error(`Failed to get Azure permissions: ${errorMessage}`);
+        }
       }
     }
   };
@@ -214,13 +240,15 @@ function App() {
             return;
           }
           // Token was acquired, continue with subscription fetch
+          setError(null);
         } catch (e: any) {
-          setError("Failed to get Azure access permissions. Please try signing in again.");
+          console.error("❌ ARM token acquisition failed:", e.message);
+          setError(e.message || "Failed to get Azure access permissions. Please try signing in again.");
           setLoading(false);
           return;
         }
       } else {
-        setError("No authentication token available. Please sign in again.");
+        setError("Please sign in to access your subscriptions.");
         return;
       }
     }
@@ -245,7 +273,18 @@ function App() {
       
       if (!resp.ok) {
         console.error("❌ API call failed:", resp.status, data);
-        setError(`Failed to fetch subscriptions: ${JSON.stringify(data)}`);
+        
+        // Provide more specific error messages based on status code
+        if (resp.status === 401) {
+          setError("Authentication failed. Please sign in again and accept Azure permissions.");
+        } else if (resp.status === 403) {
+          setError("Access denied. You may not have permissions to view subscriptions in this tenant, or admin consent may be required.");
+        } else if (resp.status === 429) {
+          setError("Too many requests. Please wait a moment and try again.");
+        } else {
+          setError(`Failed to fetch subscriptions (${resp.status}): ${data.detail || JSON.stringify(data)}`);
+        }
+        
         setSubscriptions([]);
         setLoading(false);
         return;
@@ -253,17 +292,25 @@ function App() {
       
       if (data.subscriptions && Array.isArray(data.subscriptions)) {
         console.log("✅ Subscriptions loaded:", data.subscriptions.length);
+        if (data.subscriptions.length === 0) {
+          setError("No subscriptions found. You may not have access to any Azure subscriptions in this tenant.");
+        }
         setSubscriptions(data.subscriptions);
       } else {
         console.error("❌ Invalid response format:", data);
-        setError("Subscriptions response format is invalid.");
+        setError("Invalid response from server. Please try again.");
         setSubscriptions([]);
       }
     } catch (e: any) {
       console.error("❌ Subscription fetch error:", e);
-      setError(
-        `Error fetching subscriptions: ${e.message || e.toString()}`
-      );
+      
+      // Provide more specific error messages
+      if (e.name === 'TypeError' && e.message.includes('fetch')) {
+        setError("Network error. Please check your internet connection and try again.");
+      } else {
+        setError(`Error fetching subscriptions: ${e.message || e.toString()}`);
+      }
+      
       setSubscriptions([]);
     }
     setLoading(false);
@@ -347,13 +394,31 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (armToken) {
-      console.log("🔄 ARM token available, auto-fetching subscriptions...");
-      fetchSubscriptions();
+  const handleManualConsent = async () => {
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length === 0) {
+      setError("Please sign in first.");
+      return;
     }
-    // eslint-disable-next-line
-  }, [armToken]);
+
+    setLoading(true);
+    setError("Redirecting to Azure for permission consent...");
+    
+    try {
+      await msalInstance.acquireTokenRedirect({
+        account: accounts[0],
+        scopes: armRequest.scopes,
+        prompt: "consent", // Force consent screen
+        extraQueryParameters: {
+          "response_mode": "fragment"
+        }
+      });
+    } catch (e: any) {
+      console.error("Manual consent error:", e);
+      setError("Failed to initiate permission request. Please try again.");
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="App">
@@ -516,6 +581,15 @@ function App() {
             <div className="error">
               ❌ {error}
             </div>
+            {(error.includes("permissions") || error.includes("consent") || error.includes("access")) && account && (
+              <button 
+                onClick={handleManualConsent}
+                className="consent-btn"
+                disabled={loading}
+              >
+                🔐 Grant Azure Permissions
+              </button>
+            )}
             <ConsentHelper error={error} onRetry={handleLogin} />
           </div>
         )}
