@@ -22,25 +22,13 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Query for orphaned managed disks and public IPs (most common orphaned resources)
+    # Simple query for orphaned managed disks (most common and costly orphaned resources)
     query = """
     Resources
     | where type =~ 'microsoft.compute/disks'
     | where isnull(managedBy) or managedBy == ''
     | extend ResourceType = 'Orphaned Disk'
     | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
-    union
-    (Resources
-    | where type =~ 'microsoft.network/publicipaddresses'
-    | where isnull(properties.ipConfiguration) or properties.ipConfiguration == ''
-    | extend ResourceType = 'Orphaned Public IP'
-    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
-    union
-    (Resources
-    | where type =~ 'microsoft.network/networkinterfaces'
-    | where isnull(properties.virtualMachine) or properties.virtualMachine == ''
-    | extend ResourceType = 'Orphaned Network Interface'
-    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
     | limit 100
     """
     
