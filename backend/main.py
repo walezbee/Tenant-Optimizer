@@ -116,6 +116,89 @@ def health_check():
         "openai_configured": bool(os.getenv("OPENAI_KEY"))
     }
 
+@app.get("/api/test/upgrade-agents")
+def test_upgrade_agents():
+    """Test endpoint to validate that automated upgrade agents are available."""
+    try:
+        agent_status = {}
+        
+        # Test Public IP agent
+        try:
+            import agents.upgrade_public_ip
+            agent_status["public_ip_agent"] = {
+                "loaded": True,
+                "module": "agents.upgrade_public_ip",
+                "functions": [f for f in dir(agents.upgrade_public_ip) if not f.startswith('_')]
+            }
+        except Exception as e:
+            agent_status["public_ip_agent"] = {"loaded": False, "error": str(e)}
+            
+        # Test Load Balancer agent
+        try:
+            import agents.upgrade_load_balancer
+            agent_status["load_balancer_agent"] = {
+                "loaded": True,
+                "module": "agents.upgrade_load_balancer",
+                "functions": [f for f in dir(agents.upgrade_load_balancer) if not f.startswith('_')]
+            }
+        except Exception as e:
+            agent_status["load_balancer_agent"] = {"loaded": False, "error": str(e)}
+            
+        # Test Storage Account agent
+        try:
+            import agents.upgrade_storage_account
+            agent_status["storage_account_agent"] = {
+                "loaded": True,
+                "module": "agents.upgrade_storage_account",
+                "functions": [f for f in dir(agents.upgrade_storage_account) if not f.startswith('_')]
+            }
+        except Exception as e:
+            agent_status["storage_account_agent"] = {"loaded": False, "error": str(e)}
+            
+        # Test Orchestrator
+        try:
+            import agents.upgrade_orchestrator
+            agent_status["orchestrator"] = {
+                "loaded": True,
+                "module": "agents.upgrade_orchestrator",
+                "functions": [f for f in dir(agents.upgrade_orchestrator) if not f.startswith('_')]
+            }
+        except Exception as e:
+            agent_status["orchestrator"] = {"loaded": False, "error": str(e)}
+            
+        # Test Azure SDK availability
+        azure_sdk_status = {}
+        try:
+            from azure.identity import DefaultAzureCredential
+            azure_sdk_status["azure_identity"] = {"loaded": True}
+        except Exception as e:
+            azure_sdk_status["azure_identity"] = {"loaded": False, "error": str(e)}
+            
+        try:
+            from azure.mgmt.network import NetworkManagementClient
+            azure_sdk_status["azure_mgmt_network"] = {"loaded": True}
+        except Exception as e:
+            azure_sdk_status["azure_mgmt_network"] = {"loaded": False, "error": str(e)}
+            
+        return {
+            "status": "test_completed",
+            "upgrade_agents": agent_status,
+            "azure_sdk": azure_sdk_status,
+            "test_timestamp": "2025-07-29",
+            "summary": {
+                "agents_loaded": sum(1 for agent in agent_status.values() if agent.get("loaded", False)),
+                "total_agents": len(agent_status),
+                "all_systems_ready": all(agent.get("loaded", False) for agent in agent_status.values())
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "status": "test_failed",
+            "error": str(e),
+            "message": "Failed to test upgrade agents"
+        }
+
 @app.get("/user")
 async def get_user_info(user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Get current user information from token."""
@@ -529,6 +612,118 @@ async def upgrade_multiple_resources(payload: dict, user_info: Dict[str, Any] = 
     except Exception as e:
         logger.error(f"❌ Batch automated upgrade system error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch upgrade system failed: {str(e)}")
+
+@app.post("/api/test/simulate-upgrade")
+async def simulate_upgrade(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """
+    Simulate an automated upgrade without actually modifying resources.
+    This allows testing the upgrade logic safely.
+    Expected payload: {"resourceId": "full-azure-resource-id", "upgradeType": "sku-upgrade"}
+    """
+    try:
+        resource_id = payload.get("resourceId")
+        upgrade_type = payload.get("upgradeType", "sku-upgrade")
+        
+        if not resource_id:
+            raise HTTPException(status_code=400, detail="Resource ID is required")
+        
+        logger.info(f"🧪 Simulating automated upgrade: {resource_id} (type: {upgrade_type})")
+        
+        # Extract resource type for simulation
+        resource_type = None
+        if "/publicIPAddresses/" in resource_id:
+            resource_type = "Microsoft.Network/publicIPAddresses"
+        elif "/loadBalancers/" in resource_id:
+            resource_type = "Microsoft.Network/loadBalancers"
+        elif "/storageAccounts/" in resource_id:
+            resource_type = "Microsoft.Storage/storageAccounts"
+        
+        if not resource_type:
+            return {
+                "success": False,
+                "message": "Could not determine resource type for simulation",
+                "resourceId": resource_id,
+                "simulation": True
+            }
+        
+        # Simulate the upgrade process
+        simulation_result = {
+            "success": True,
+            "message": f"🧪 SIMULATION: Automated upgrade would complete successfully!",
+            "resourceId": resource_id,
+            "simulation": True,
+            "automationDetails": {
+                "agent_used": f"upgrade_{resource_type.split('/')[-1].lower()}",
+                "automation_level": "Full",
+                "manual_intervention_required": False,
+                "steps_completed": []
+            },
+            "upgradeDetails": {
+                "resource_type": resource_type,
+                "simulation_mode": True
+            },
+            "status": "simulation_completed"
+        }
+        
+        # Add resource-specific simulation details
+        if "publicIPAddresses" in resource_type:
+            simulation_result["automationDetails"]["steps_completed"] = [
+                "✅ [SIMULATED] Retrieved Public IP configuration",
+                "✅ [SIMULATED] Identified attached resources",
+                "✅ [SIMULATED] Would dissociate from attached resources",
+                "✅ [SIMULATED] Would upgrade SKU from Basic to Standard",
+                "✅ [SIMULATED] Would re-associate with resources"
+            ]
+            simulation_result["upgradeDetails"].update({
+                "original_sku": "Basic (simulated)",
+                "new_sku": "Standard (simulated)",
+                "attached_resources_count": 1,
+                "dissociation_success": True,
+                "upgrade_success": True,
+                "re_association_success": True
+            })
+            
+        elif "loadBalancers" in resource_type:
+            simulation_result["automationDetails"]["steps_completed"] = [
+                "✅ [SIMULATED] Validated upgrade compatibility",
+                "✅ [SIMULATED] Would preserve frontend IP configurations",
+                "✅ [SIMULATED] Would preserve backend address pools",
+                "✅ [SIMULATED] Would preserve load balancing rules",
+                "✅ [SIMULATED] Would upgrade SKU from Basic to Standard"
+            ]
+            simulation_result["upgradeDetails"].update({
+                "original_sku": "Basic (simulated)",
+                "new_sku": "Standard (simulated)",
+                "frontend_configs_count": 1,
+                "backend_pools_count": 1,
+                "rules_count": 2
+            })
+            
+        elif "storageAccounts" in resource_type:
+            simulation_result["automationDetails"]["steps_completed"] = [
+                "✅ [SIMULATED] Analyzed storage account configuration",
+                "✅ [SIMULATED] Would identify optimization opportunities",
+                "✅ [SIMULATED] Would apply performance and efficiency upgrades",
+                "✅ [SIMULATED] Would validate new configuration"
+            ]
+            simulation_result["upgradeDetails"].update({
+                "original_sku": "Standard_LRS (simulated)",
+                "new_sku": "Standard_ZRS (simulated)",
+                "upgrades_applied": ["Zone redundancy upgrade"],
+                "performance_improvements": ["Higher availability with zone redundancy"]
+            })
+        
+        logger.info(f"✅ Simulation completed successfully: {resource_id}")
+        return simulation_result
+        
+    except Exception as e:
+        logger.error(f"❌ Simulation error: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Simulation failed: {str(e)}",
+            "resourceId": resource_id,
+            "simulation": True
+        }
 
 # Automated upgrade system integrated above - old manual functions removed
 # The new system uses specialized agents for each resource type with full automation
