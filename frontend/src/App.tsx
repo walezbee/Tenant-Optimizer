@@ -96,8 +96,7 @@ function App() {
           try {
             const armTokenResp = await msalInstance.acquireTokenPopup({
               account: loginResponse.account,
-              scopes: armRequest.scopes,
-              prompt: "consent"
+              ...armRequest // Use all settings from armRequest config including scopes
             });
             setArmToken(armTokenResp.accessToken);
           } catch (armInteractiveError: any) {

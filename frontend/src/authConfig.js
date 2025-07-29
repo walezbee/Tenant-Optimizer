@@ -20,20 +20,26 @@ export const msalConfig = {
     }
 };
 
-// Scopes used for login
+// Scopes used for login - simplified for multi-tenant
 export const loginRequest = {
     scopes: [
         "openid",
         "profile", 
-        "offline_access"
+        "email" // Add email scope explicitly
     ],
-    prompt: "select_account" // Force account selection for multi-tenant
+    prompt: "select_account", // Force account selection for multi-tenant
+    extraQueryParameters: {
+        "response_mode": "fragment" // Ensure fragment mode for SPA
+    }
 };
 
-// Scopes for ARM (Azure Resource Manager) API
+// Scopes for ARM (Azure Resource Manager) API - simplified approach
 export const armRequest = {
     scopes: ["https://management.azure.com/user_impersonation"],
-    prompt: "select_account" // Changed from "consent" - admin consent already granted
+    // Remove prompt entirely - let MSAL handle it automatically
+    extraQueryParameters: {
+        "response_mode": "fragment"
+    }
 };
 
 // Scopes for custom API
