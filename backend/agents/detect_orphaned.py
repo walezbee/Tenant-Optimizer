@@ -22,14 +22,12 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Simple query for orphaned managed disks (most common and costly orphaned resources)
+    # Test query - just get all disks first to ensure basic functionality
     query = """
     Resources
     | where type =~ 'microsoft.compute/disks'
-    | where isnull(managedBy) or managedBy == ''
-    | extend ResourceType = 'Orphaned Disk'
-    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
-    | limit 100
+    | project id, name, type, location, resourceGroup, sku, tags, properties
+    | limit 10
     """
     
     payload = {
@@ -37,8 +35,10 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "query": query
     }
     
-    logger.info(f"🔍 Querying Resource Graph for orphaned resources in {len(subscriptions)} subscriptions")
+    logger.info(f"🔍 Querying Resource Graph for disks in {len(subscriptions)} subscriptions")
     logger.info(f"📡 Resource Graph URL: {url}")
+    logger.info(f"🔎 Subscriptions: {subscriptions}")
+    logger.info(f"📝 Query: {query}")
     
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -94,159 +94,52 @@ async def detect_orphaned_resources(user_token, subscriptions):
         raise Exception(f"Failed to query Azure Resource Graph: {str(e)}")
     
     if not resources:
-        logger.info("✅ No orphaned resources found")
-        return []
+        logger.info("✅ No resources found in Resource Graph response")
+        # Return a test result to confirm the function is working
+        return [{
+            "resourceId": "test-no-resources-found",
+            "resourceName": "No Resources Found", 
+            "resourceType": "Test",
+            "location": "N/A",
+            "resourceGroup": "N/A",
+            "issue": "No disks found in the selected subscriptions",
+            "recommendation": "This means either there are no managed disks, or there may be an issue with the query or permissions.",
+            "estimatedMonthlyCost": "$0",
+            "priority": "Low"
+        }]
 
-    # Check if OpenAI API key is available and valid
-    openai_key = os.getenv("OPENAI_KEY")
-    if not openai_key or not openai_key.startswith("sk-"):
-        logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
-        # Return structured data without AI analysis
-        orphaned_findings = []
-        for resource in resources:
-            resource_type = resource.get("type", "").lower()
-            resource_name = resource.get("name", "")
-            resource_id = resource.get("id", "")
-            
-            # Determine the specific issue and recommendation based on resource type
-            if "disk" in resource_type:
-                issue = "Orphaned managed disk - not attached to any virtual machine"
-                recommendation = "Review if this disk contains important data. If not needed, delete to save storage costs (~$4-50/month depending on size and type)."
-                cost_estimate = "~$4-50/month"
-            elif "publicipaddress" in resource_type:
-                sku_name = resource.get("sku", {}).get("name", "")
-                issue = f"Orphaned public IP address ({sku_name} SKU) - not associated with any resource"
-                recommendation = "Delete unused public IP to save costs. Basic SKU: ~$3.65/month, Standard SKU varies by region."
-                cost_estimate = "~$3-15/month"
-            elif "networksecuritygroup" in resource_type:
-                issue = "Orphaned Network Security Group - not associated with any subnet or network interface"
-                recommendation = "Review and delete if not needed. NSGs don't incur direct costs but add management overhead."
-                cost_estimate = "No direct cost"
-            elif "networkinterface" in resource_type:
-                issue = "Orphaned Network Interface - not attached to any virtual machine"
-                recommendation = "Delete unused network interface. No direct cost but may hold IP addresses unnecessarily."
-                cost_estimate = "No direct cost"
-            elif "loadbalancer" in resource_type:
-                sku_name = resource.get("sku", {}).get("name", "")
-                issue = f"Orphaned Load Balancer ({sku_name} SKU) - no backend pools or rules configured"
-                recommendation = "Delete unused load balancer. Standard SKU incurs hourly charges (~$18/month)."
-                cost_estimate = "~$18/month for Standard"
-            elif "applicationgateway" in resource_type:
-                issue = "Orphaned Application Gateway - no backend address pools configured"
-                recommendation = "Delete unused Application Gateway. Significant cost (~$125-250/month) plus data processing fees."
-                cost_estimate = "~$125-250/month"
-            elif "storageaccount" in resource_type:
-                issue = "Potentially orphaned Storage Account - may be unused"
-                recommendation = "Review storage account usage. Check last access time and delete if confirmed unused. Costs vary by data stored and tier."
-                cost_estimate = "Varies by usage"
-            else:
-                issue = "Potentially orphaned resource - not in use by other resources"
-                recommendation = "Review resource usage and delete if confirmed unused to save costs."
-                cost_estimate = "Varies"
-            
-            orphaned_findings.append({
-                "resourceId": resource_id,
-                "resourceName": resource_name,
-                "resourceType": resource.get("type", ""),
-                "location": resource.get("location", ""),
-                "resourceGroup": resource.get("resourceGroup", ""),
-                "issue": f"{issue} - Basic analysis without AI",
-                "recommendation": f"{recommendation} Note: Advanced AI analysis unavailable - verify before deletion.",
-                "estimatedMonthlyCost": cost_estimate,
-                "priority": "Medium"
-            })
+    # For debugging - return simplified results for all found disks
+    logger.info(f"📊 Processing {len(resources)} resources for analysis")
+    
+    # Return basic information about found disks
+    orphaned_findings = []
+    for resource in resources:
+        resource_name = resource.get("name", "")
+        resource_id = resource.get("id", "")
+        managed_by = resource.get("properties", {}).get("managedBy") if isinstance(resource.get("properties"), dict) else None
         
-        return orphaned_findings
-    
-    # Initialize OpenAI client
-    client = OpenAI(api_key=openai_key)
-    
-    prompt = f"""
-You are an Azure cloud optimization expert with deep knowledge of Azure resource management and cost optimization.
-
-TASK: Analyze the following Azure resources and identify which are truly orphaned/unused and costing money unnecessarily.
-
-AZURE ORPHANED RESOURCE EXPERTISE:
-- Managed Disks: Orphaned if managedBy is null/empty (not attached to VMs)
-- Public IPs: Orphaned if ipConfiguration is null/empty (not associated with resources)
-- Network Security Groups: Orphaned if no subnets or network interfaces associated
-- Network Interfaces: Orphaned if virtualMachine is null/empty (not attached to VMs)
-- Storage Accounts: May be orphaned if unused for extended periods
-- Load Balancers: Orphaned if no backend pools or load balancing rules
-- Application Gateways: Orphaned if no backend address pools configured
-- Availability Sets: Orphaned if no virtual machines assigned
-
-COST IMPACT KNOWLEDGE:
-- Managed Disks: Charged for storage capacity (Premium SSD > Standard SSD > Standard HDD)
-- Public IPs: Basic SKU ~$3.65/month, Standard SKU varies by region
-- Storage Accounts: Charged for storage used, transactions, and redundancy level
-- Load Balancers: Basic is free, Standard has hourly charges
-- Application Gateways: Significant hourly charges + data processing fees
-
-For each truly orphaned resource, return a JSON object with:
-- resourceId: Full Azure resource ID
-- resourceName: Resource name
-- resourceType: Azure resource type
-- location: Azure region
-- resourceGroup: Resource group name
-- issue: Specific reason why it's orphaned and costing money
-- recommendation: Detailed action to take (delete, modify, or investigate)
-- estimatedMonthlyCost: Rough monthly cost estimate if available
-- priority: High/Medium/Low based on cost impact
-
-RESOURCES TO ANALYZE:
-{json.dumps(resources, indent=2)}
-
-Return ONLY a JSON array of truly orphaned resources that are costing money unnecessarily. If no resources are orphaned, return an empty array [].
-"""
-    
-    try:
-        logger.info("🤖 Analyzing orphaned resources with OpenAI...")
-        response = client.chat.completions.create(
-            model="gpt-4",  # Use gpt-4 instead of gpt-4o if not available
-            messages=[
-                {"role": "system", "content": "You are an Azure cloud cost optimization expert with comprehensive knowledge of Azure resource relationships, dependencies, and cost structures. You specialize in identifying truly orphaned resources that are unnecessarily costing money."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=3000,
-            temperature=0.0
-        )
+        if not managed_by:  # This is an orphaned disk
+            issue = "Orphaned managed disk - not attached to any virtual machine"
+            recommendation = "Review if this disk contains important data. If not needed, delete to save storage costs."
+            cost_estimate = "~$4-50/month"
+            priority = "Medium"
+        else:
+            issue = "Managed disk is attached to a VM"
+            recommendation = "This disk is in use and should not be deleted."
+            cost_estimate = "Active resource"
+            priority = "Low"
         
-        result = response.choices[0].message.content
-        # Try to parse as JSON, fallback to structured data
-        try:
-            parsed_result = json.loads(result)
-            if isinstance(parsed_result, list):
-                return parsed_result
-            else:
-                return [parsed_result] if isinstance(parsed_result, dict) else []
-        except json.JSONDecodeError:
-            logger.warning("⚠️ OpenAI returned non-JSON response, using fallback data")
-            return [
-                {
-                    "resourceId": resource.get("id", ""),
-                    "resourceName": resource.get("name", ""),
-                    "resourceType": resource.get("type", ""),
-                    "location": resource.get("location", ""),
-                    "resourceGroup": resource.get("resourceGroup", ""),
-                    "issue": "Potentially orphaned resource (AI analysis failed)",
-                    "recommendation": "Review if this resource is still needed. If not, consider deleting to save costs. Note: AI analysis failed - basic recommendation provided."
-                }
-                for resource in resources
-            ]
-            
-    except Exception as e:
-        logger.error(f"❌ OpenAI API error: {str(e)}")
-        # Return fallback data when OpenAI fails
-        return [
-            {
-                "resourceId": resource.get("id", ""),
-                "resourceName": resource.get("name", ""),
-                "resourceType": resource.get("type", ""),
-                "location": resource.get("location", ""),
-                "resourceGroup": resource.get("resourceGroup", ""),
-                "issue": "Potentially orphaned resource (AI analysis failed)",
-                "recommendation": f"Review if this resource is still needed. If not, consider deleting to save costs. Note: AI analysis failed due to: {str(e)}"
-            }
-            for resource in resources
-        ]
+        orphaned_findings.append({
+            "resourceId": resource_id,
+            "resourceName": resource_name,
+            "resourceType": resource.get("type", ""),
+            "location": resource.get("location", ""),
+            "resourceGroup": resource.get("resourceGroup", ""),
+            "issue": f"{issue} - Debug mode",
+            "recommendation": f"{recommendation} [managedBy: {managed_by}]",
+            "estimatedMonthlyCost": cost_estimate,
+            "priority": priority
+        })
+    
+    logger.info(f"✅ Returning {len(orphaned_findings)} disk analysis results")
+    return orphaned_findings
