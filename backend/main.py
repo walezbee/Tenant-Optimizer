@@ -192,16 +192,14 @@ def test_upgrade_agents():
         }
     }
 
-@app.get("/api/scan/orphaned")
-async def scan_orphaned_resources(subscription_ids: str = "", user_info: Dict[str, Any] = Depends(verify_azure_token)):
+@app.post("/api/scan/orphaned")
+async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Scan for orphaned Azure resources."""
     try:
         token = user_info['token']
         
-        # Parse subscription IDs
-        subscriptions = []
-        if subscription_ids:
-            subscriptions = [s.strip() for s in subscription_ids.split(',') if s.strip()]
+        # Extract subscriptions from payload
+        subscriptions = payload.get("subscriptions", [])
         
         # Basic query for orphaned disks
         query = """
@@ -269,16 +267,14 @@ async def scan_orphaned_resources(subscription_ids: str = "", user_info: Dict[st
             "total_resources": 0
         }
 
-@app.get("/api/scan/deprecated")
-async def scan_deprecated_resources(subscription_ids: str = "", user_info: Dict[str, Any] = Depends(verify_azure_token)):
+@app.post("/api/scan/deprecated")
+async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Scan for deprecated Azure resources."""
     try:
         token = user_info['token']
         
-        # Parse subscription IDs
-        subscriptions = []
-        if subscription_ids:
-            subscriptions = [s.strip() for s in subscription_ids.split(',') if s.strip()]
+        # Extract subscriptions from payload
+        subscriptions = payload.get("subscriptions", [])
         
         # Basic query for deprecated resources
         query = """
@@ -356,6 +352,47 @@ async def scan_deprecated_resources(subscription_ids: str = "", user_info: Dict[
             "message": f"Scan failed: {str(e)}",
             "resources": [],
             "total_resources": 0
+        }
+
+@app.post("/api/resources/delete")
+async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Delete an Azure resource."""
+    try:
+        resource_id = payload.get("resourceId")
+        if not resource_id:
+            raise HTTPException(status_code=400, detail="Resource ID is required")
+        
+        logger.info(f"🗑️ Deleting resource: {resource_id}")
+        
+        # Use Azure Resource Manager API to delete the resource
+        url = f"https://management.azure.com{resource_id}?api-version=2021-04-01"
+        headers = {"Authorization": f"Bearer {user_info['token']}"}
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.delete(url, headers=headers)
+            
+            if response.status_code in [200, 202, 204]:
+                logger.info("✅ Resource deletion initiated successfully")
+                return {
+                    "success": True,
+                    "message": "Resource deletion initiated",
+                    "status": "deleted" if response.status_code == 200 else "deletion_initiated",
+                    "resourceId": resource_id
+                }
+            else:
+                logger.error(f"❌ Failed to delete resource: {response.status_code} - {response.text}")
+                return {
+                    "success": False,
+                    "message": f"Failed to delete resource: {response.status_code} - {response.text}",
+                    "resourceId": resource_id
+                }
+                
+    except Exception as e:
+        logger.error(f"Delete resource error: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Delete failed: {str(e)}",
+            "resourceId": payload.get("resourceId", "unknown")
         }
 
 @app.post("/api/resources/upgrade")
