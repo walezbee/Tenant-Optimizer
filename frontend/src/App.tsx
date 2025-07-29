@@ -75,6 +75,8 @@ function App() {
         
         if (response) {
           console.log("✅ Redirect response received:", response);
+          console.log("🔍 Response scopes:", response.scopes);
+          console.log("🔍 Response account:", response.account?.username);
           
           if (response.account) {
             setAccount(response.account);
@@ -83,9 +85,14 @@ function App() {
           
           if (response.accessToken) {
             // Check what kind of token we got
+            console.log("🔑 Access token received from redirect");
+            console.log("🔑 Token scopes:", response.scopes);
+            
             if (response.scopes?.includes("https://management.azure.com/user_impersonation")) {
               setArmToken(response.accessToken);
               console.log("✅ ARM token set from redirect");
+            } else {
+              console.log("ℹ️ Non-ARM token received:", response.scopes);
             }
           }
         } else {
@@ -136,14 +143,22 @@ function App() {
       // Get ARM token
       try {
         console.log("🔑 Getting ARM token...");
+        console.log("🔑 ARM request scopes:", armRequest.scopes);
+        
         const armTokenResp = await msalInstance.acquireTokenSilent({
           account: account,
           scopes: armRequest.scopes,
         });
-        setArmToken(armTokenResp.accessToken);
+        
         console.log("✅ ARM token acquired successfully");
+        console.log("🔑 ARM token audience:", armTokenResp.account?.idTokenClaims?.aud);
+        console.log("🔑 ARM token length:", armTokenResp.accessToken.length);
+        
+        setArmToken(armTokenResp.accessToken);
       } catch (armError: any) {
         console.log("⚠️ Silent ARM token failed, trying redirect:", armError.errorCode);
+        console.log("⚠️ ARM error details:", armError);
+        
         // Use redirect instead of popup to avoid blocking
         if (
           armError.errorCode === "interaction_required" ||
@@ -151,6 +166,7 @@ function App() {
           armError.errorCode === "login_required" ||
           armError.errorCode === "admin_consent_required"
         ) {
+          console.log("🔄 Redirecting for ARM token...");
           await msalInstance.acquireTokenRedirect({
             account: account,
             scopes: armRequest.scopes,
@@ -172,25 +188,48 @@ function App() {
   };
 
   const fetchSubscriptions = async () => {
-    if (!armToken) return;
+    if (!armToken) {
+      console.error("❌ No ARM token available");
+      setError("No authentication token available. Please sign in again.");
+      return;
+    }
+    
+    console.log("🔄 Starting subscription fetch...");
+    console.log("ARM Token present:", !!armToken);
+    console.log("ARM Token length:", armToken.length);
+    
     setLoading(true);
     setError(null);
+    
     try {
+      const fullUrl = `${getBackendUrl()}/api/subscriptions`;
+      console.log("📡 Calling URL:", fullUrl);
+      
       const resp = await fetchWithAuth("/api/subscriptions", armToken);
+      console.log("📡 Response status:", resp.status);
+      console.log("📡 Response headers:", Object.fromEntries(resp.headers.entries()));
+      
       const data = await resp.json();
+      console.log("📡 Response data:", data);
+      
       if (!resp.ok) {
+        console.error("❌ API call failed:", resp.status, data);
         setError(`Failed to fetch subscriptions: ${JSON.stringify(data)}`);
         setSubscriptions([]);
         setLoading(false);
         return;
       }
+      
       if (data.subscriptions && Array.isArray(data.subscriptions)) {
+        console.log("✅ Subscriptions loaded:", data.subscriptions.length);
         setSubscriptions(data.subscriptions);
       } else {
+        console.error("❌ Invalid response format:", data);
         setError("Subscriptions response format is invalid.");
         setSubscriptions([]);
       }
     } catch (e: any) {
+      console.error("❌ Subscription fetch error:", e);
       setError(
         `Error fetching subscriptions: ${e.message || e.toString()}`
       );
@@ -279,6 +318,7 @@ function App() {
 
   useEffect(() => {
     if (armToken) {
+      console.log("🔄 ARM token available, auto-fetching subscriptions...");
       fetchSubscriptions();
     }
     // eslint-disable-next-line
