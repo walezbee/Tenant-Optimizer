@@ -49,19 +49,40 @@ async def detect_deprecated_resources(user_token, subscriptions):
             resp.raise_for_status()
             data = resp.json()
             
-        # Extract the rows from the Resource Graph response
-        rows = data.get("data", {}).get("rows", [])
-        columns = data.get("data", {}).get("columns", [])
+        # Extract the data from the Resource Graph response
+        # Resource Graph can return data in different formats
+        data_content = data.get("data", {})
         
-        logger.info(f"📊 Found {len(rows)} resources to analyze for deprecation")
+        logger.info(f"📊 Resource Graph response structure: {type(data_content)}")
+        logger.info(f"📊 Full response keys: {list(data.keys())}")
         
-        # Convert rows to dictionaries using column names
-        resources = []
-        if columns and rows:
-            column_names = [col["name"] for col in columns]
-            for row in rows:
-                resource_dict = dict(zip(column_names, row))
-                resources.append(resource_dict)
+        # Handle different response formats
+        if isinstance(data_content, dict):
+            # Standard format with rows and columns
+            rows = data_content.get("rows", [])
+            columns = data_content.get("columns", [])
+            
+            logger.info(f"📊 Found {len(rows)} rows with {len(columns)} columns")
+            
+            # Convert rows to dictionaries using column names
+            resources = []
+            if columns and rows:
+                column_names = [col["name"] for col in columns]
+                for row in rows:
+                    resource_dict = dict(zip(column_names, row))
+                    resources.append(resource_dict)
+        elif isinstance(data_content, list):
+            # Direct list format (some API versions return this)
+            resources = data_content
+            logger.info(f"📊 Found {len(resources)} resources in list format")
+        else:
+            # Fallback - check if data is directly in the response
+            if "value" in data:
+                resources = data["value"]
+                logger.info(f"📊 Found {len(resources)} resources in value field")
+            else:
+                logger.warning("⚠️ Unexpected Resource Graph response format")
+                resources = []
     
     except httpx.HTTPStatusError as e:
         logger.error(f"❌ Resource Graph HTTP error: {e.response.status_code} - {e.response.text}")

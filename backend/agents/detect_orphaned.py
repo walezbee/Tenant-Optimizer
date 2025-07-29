@@ -50,19 +50,40 @@ async def detect_orphaned_resources(user_token, subscriptions):
             resp.raise_for_status()
             data = resp.json()
             
-        # Extract the rows from the Resource Graph response
-        rows = data.get("data", {}).get("rows", [])
-        columns = data.get("data", {}).get("columns", [])
+        # Extract the data from the Resource Graph response
+        # Resource Graph can return data in different formats
+        data_content = data.get("data", {})
         
-        logger.info(f"📊 Found {len(rows)} potential orphaned resources")
+        logger.info(f"📊 Resource Graph response structure: {type(data_content)}")
+        logger.info(f"📊 Full response keys: {list(data.keys())}")
         
-        # Convert rows to dictionaries using column names
-        disks = []
-        if columns and rows:
-            column_names = [col["name"] for col in columns]
-            for row in rows:
-                disk_dict = dict(zip(column_names, row))
-                disks.append(disk_dict)
+        # Handle different response formats
+        if isinstance(data_content, dict):
+            # Standard format with rows and columns
+            rows = data_content.get("rows", [])
+            columns = data_content.get("columns", [])
+            
+            logger.info(f"📊 Found {len(rows)} rows with {len(columns)} columns")
+            
+            # Convert rows to dictionaries using column names
+            disks = []
+            if columns and rows:
+                column_names = [col["name"] for col in columns]
+                for row in rows:
+                    disk_dict = dict(zip(column_names, row))
+                    disks.append(disk_dict)
+        elif isinstance(data_content, list):
+            # Direct list format (some API versions return this)
+            disks = data_content
+            logger.info(f"📊 Found {len(disks)} resources in list format")
+        else:
+            # Fallback - check if data is directly in the response
+            if "value" in data:
+                disks = data["value"]
+                logger.info(f"📊 Found {len(disks)} resources in value field")
+            else:
+                logger.warning("⚠️ Unexpected Resource Graph response format")
+                disks = []
     
     except httpx.HTTPStatusError as e:
         logger.error(f"❌ Resource Graph HTTP error: {e.response.status_code} - {e.response.text}")
