@@ -81,6 +81,12 @@ function App() {
           if (response.account) {
             setAccount(response.account);
             console.log("✅ Account set from redirect:", response.account.username);
+            
+            // If this was a login redirect (not ARM token redirect), get ARM token
+            if (!response.scopes?.includes("https://management.azure.com/user_impersonation")) {
+              console.log("🔄 Login redirect completed, now getting ARM token...");
+              setTimeout(() => acquireArmToken(response.account!), 1000);
+            }
           }
           
           if (response.accessToken) {
@@ -140,42 +146,8 @@ function App() {
       setAccount(account);
       console.log("✅ User already signed in:", account.username);
       
-      // Get ARM token
-      try {
-        console.log("🔑 Getting ARM token...");
-        console.log("🔑 ARM request scopes:", armRequest.scopes);
-        
-        const armTokenResp = await msalInstance.acquireTokenSilent({
-          account: account,
-          scopes: armRequest.scopes,
-        });
-        
-        console.log("✅ ARM token acquired successfully");
-        console.log("🔑 ARM token audience:", armTokenResp.account?.idTokenClaims?.aud);
-        console.log("🔑 ARM token length:", armTokenResp.accessToken.length);
-        
-        setArmToken(armTokenResp.accessToken);
-      } catch (armError: any) {
-        console.log("⚠️ Silent ARM token failed, trying redirect:", armError.errorCode);
-        console.log("⚠️ ARM error details:", armError);
-        
-        // Use redirect instead of popup to avoid blocking
-        if (
-          armError.errorCode === "interaction_required" ||
-          armError.errorCode === "consent_required" ||
-          armError.errorCode === "login_required" ||
-          armError.errorCode === "admin_consent_required"
-        ) {
-          console.log("🔄 Redirecting for ARM token...");
-          await msalInstance.acquireTokenRedirect({
-            account: account,
-            scopes: armRequest.scopes,
-          });
-          return; // This will redirect and reload the page
-        } else {
-          throw armError;
-        }
-      }
+      // Get ARM token immediately after login
+      await acquireArmToken(account);
 
       setError(null);
     } catch (e: any) {
@@ -187,16 +159,75 @@ function App() {
     }
   };
 
+  const acquireArmToken = async (account: AccountInfo) => {
+    try {
+      console.log("🔑 Getting ARM token...");
+      console.log("🔑 ARM request scopes:", armRequest.scopes);
+      
+      const armTokenResp = await msalInstance.acquireTokenSilent({
+        account: account,
+        scopes: armRequest.scopes,
+      });
+      
+      console.log("✅ ARM token acquired successfully");
+      console.log("🔑 ARM token audience:", armTokenResp.account?.idTokenClaims?.aud);
+      console.log("🔑 ARM token length:", armTokenResp.accessToken.length);
+      
+      setArmToken(armTokenResp.accessToken);
+      return armTokenResp.accessToken;
+    } catch (armError: any) {
+      console.log("⚠️ Silent ARM token failed, trying redirect:", armError.errorCode);
+      console.log("⚠️ ARM error details:", armError);
+      
+      // Use redirect instead of popup to avoid blocking
+      if (
+        armError.errorCode === "interaction_required" ||
+        armError.errorCode === "consent_required" ||
+        armError.errorCode === "login_required" ||
+        armError.errorCode === "admin_consent_required"
+      ) {
+        console.log("🔄 Redirecting for ARM token...");
+        await msalInstance.acquireTokenRedirect({
+          account: account,
+          scopes: armRequest.scopes,
+        });
+        return null; // This will redirect and reload the page
+      } else {
+        throw armError;
+      }
+    }
+  };
+
   const fetchSubscriptions = async () => {
     if (!armToken) {
-      console.error("❌ No ARM token available");
-      setError("No authentication token available. Please sign in again.");
-      return;
+      console.error("❌ No ARM token available, trying to acquire one...");
+      
+      // Try to get ARM token first
+      const accounts = msalInstance.getAllAccounts();
+      if (accounts.length > 0) {
+        setLoading(true);
+        setError("Getting Azure access permissions...");
+        try {
+          const token = await acquireArmToken(accounts[0]);
+          if (!token) {
+            // Redirect was triggered, function will return
+            return;
+          }
+          // Token was acquired, continue with subscription fetch
+        } catch (e: any) {
+          setError("Failed to get Azure access permissions. Please try signing in again.");
+          setLoading(false);
+          return;
+        }
+      } else {
+        setError("No authentication token available. Please sign in again.");
+        return;
+      }
     }
     
     console.log("🔄 Starting subscription fetch...");
     console.log("ARM Token present:", !!armToken);
-    console.log("ARM Token length:", armToken.length);
+    console.log("ARM Token length:", armToken?.length);
     
     setLoading(true);
     setError(null);
@@ -205,7 +236,7 @@ function App() {
       const fullUrl = `${getBackendUrl()}/api/subscriptions`;
       console.log("📡 Calling URL:", fullUrl);
       
-      const resp = await fetchWithAuth("/api/subscriptions", armToken);
+      const resp = await fetchWithAuth("/api/subscriptions", armToken!);
       console.log("📡 Response status:", resp.status);
       console.log("📡 Response headers:", Object.fromEntries(resp.headers.entries()));
       

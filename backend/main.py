@@ -127,12 +127,22 @@ async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_to
     """
     List user's Azure subscriptions using their token.
     """
+    logger.info(f"📋 Subscription request from user: {user_info.get('user_email')}")
+    logger.info(f"🔑 Token audience: {user_info.get('audience')}")
+    logger.info(f"🏢 Tenant ID: {user_info.get('tenant_id')}")
+    
     try:
         url = "https://management.azure.com/subscriptions?api-version=2020-01-01"
         headers = {"Authorization": f"Bearer {user_info['token']}"}
         
+        logger.info(f"📡 Calling Azure API: {url}")
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(url, headers=headers)
+            logger.info(f"📡 Azure API response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Azure API error response: {response.text}")
+            
             response.raise_for_status()
             data = response.json()
             
@@ -145,14 +155,15 @@ async def list_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_to
             for sub in data.get("value", [])
         ]
         
+        logger.info(f"✅ Found {len(subscriptions)} subscriptions")
         return {"subscriptions": subscriptions}
         
     except httpx.HTTPStatusError as e:
         logger.error(f"Azure API error: {e.response.status_code} - {e.response.text}")
-        raise HTTPException(status_code=e.response.status_code, detail="Failed to fetch subscriptions")
+        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch subscriptions: {e.response.text}")
     except Exception as e:
         logger.error(f"Subscription fetch error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.post("/api/scan/orphaned")
 async def scan_orphaned(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
