@@ -29,20 +29,18 @@ async def detect_orphaned_resources(user_token, subscriptions):
     | where isnull(managedBy) or managedBy == ''
     | extend ResourceType = 'Orphaned Disk'
     | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
-    | union (
-        Resources
-        | where type =~ 'microsoft.network/publicipaddresses'
-        | where isnull(properties.ipConfiguration) or properties.ipConfiguration == ''
-        | extend ResourceType = 'Orphaned Public IP'
-        | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
-    )
-    | union (
-        Resources
-        | where type =~ 'microsoft.network/networkinterfaces'
-        | where isnull(properties.virtualMachine) or properties.virtualMachine == ''
-        | extend ResourceType = 'Orphaned Network Interface'
-        | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties
-    )
+    union
+    (Resources
+    | where type =~ 'microsoft.network/publicipaddresses'
+    | where isnull(properties.ipConfiguration) or properties.ipConfiguration == ''
+    | extend ResourceType = 'Orphaned Public IP'
+    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
+    union
+    (Resources
+    | where type =~ 'microsoft.network/networkinterfaces'
+    | where isnull(properties.virtualMachine) or properties.virtualMachine == ''
+    | extend ResourceType = 'Orphaned Network Interface'
+    | project id, name, type, location, resourceGroup, ResourceType, sku, tags, properties)
     | limit 100
     """
     
