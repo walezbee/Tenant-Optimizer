@@ -22,13 +22,87 @@ async def detect_orphaned_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Query for orphaned managed disks
+    # Comprehensive query for ALL types of orphaned resources
     query = """
+    // Orphaned Managed Disks (not attached to any VM)
     Resources
     | where type =~ 'microsoft.compute/disks'
     | where isnull(managedBy) or managedBy == ''
-    | project id, name, type, location, resourceGroup, managedBy, sku, tags, properties
-    | limit 100
+    | extend ResourceType = 'Orphaned Disk', Cost = sku.tier
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Public IP Addresses (not associated with any resource)
+    Resources
+    | where type =~ 'microsoft.network/publicipaddresses'
+    | extend ipConfig = properties.ipConfiguration.id
+    | where isnull(ipConfig) or ipConfig == ''
+    | extend ResourceType = 'Orphaned Public IP', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Network Security Groups (not associated with any subnet or NIC)
+    Resources
+    | where type =~ 'microsoft.network/networksecuritygroups'
+    | extend subnets = properties.subnets
+    | extend networkInterfaces = properties.networkInterfaces
+    | where array_length(subnets) == 0 and array_length(networkInterfaces) == 0
+    | extend ResourceType = 'Orphaned Network Security Group', Cost = 'Standard'
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Network Interfaces (not attached to any VM)
+    Resources
+    | where type =~ 'microsoft.network/networkinterfaces'
+    | extend virtualMachine = properties.virtualMachine.id
+    | where isnull(virtualMachine) or virtualMachine == ''
+    | extend ResourceType = 'Orphaned Network Interface', Cost = 'Standard'
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Storage Accounts (unused for extended periods - identify by last access)
+    Resources
+    | where type =~ 'microsoft.storage/storageaccounts'
+    | extend lastAccess = properties.lastGeoFailoverTime
+    | extend ResourceType = 'Potentially Orphaned Storage Account', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Load Balancers (no backend pools or rules configured)
+    Resources
+    | where type =~ 'microsoft.network/loadbalancers'
+    | extend backendPools = properties.backendAddressPools
+    | extend rules = properties.loadBalancingRules
+    | where array_length(backendPools) == 0 or array_length(rules) == 0
+    | extend ResourceType = 'Orphaned Load Balancer', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Orphaned Application Gateways (no backend pools)
+    Resources
+    | where type =~ 'microsoft.network/applicationgateways'
+    | extend backendPools = properties.backendAddressPools
+    | where array_length(backendPools) == 0
+    | extend ResourceType = 'Orphaned Application Gateway', Cost = sku.name
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    union
+    
+    // Unattached Availability Sets (no VMs assigned)
+    Resources
+    | where type =~ 'microsoft.compute/availabilitysets'
+    | extend virtualMachines = properties.virtualMachines
+    | where array_length(virtualMachines) == 0
+    | extend ResourceType = 'Empty Availability Set', Cost = 'Free'
+    | project id, name, type, location, resourceGroup, ResourceType, Cost, sku, tags, properties
+    
+    | limit 200
     """
     
     payload = {
@@ -101,38 +175,113 @@ async def detect_orphaned_resources(user_token, subscriptions):
     if not openai_key or not openai_key.startswith("sk-"):
         logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
         # Return structured data without AI analysis
-        return [
-            {
-                "resourceId": disk.get("id", ""),
-                "resourceName": disk.get("name", ""),
-                "resourceType": disk.get("type", ""),
-                "location": disk.get("location", ""),
-                "resourceGroup": disk.get("resourceGroup", ""),
-                "issue": "Potentially orphaned disk (not attached to any VM) - Basic analysis without AI",
-                "recommendation": "Review if this disk is still needed. If not, consider deleting to save costs. Note: Advanced AI analysis unavailable - check OpenAI API key configuration."
-            }
-            for disk in disks
-        ]
+        orphaned_findings = []
+        for resource in disks:
+            resource_type = resource.get("type", "").lower()
+            resource_name = resource.get("name", "")
+            resource_id = resource.get("id", "")
+            
+            # Determine the specific issue and recommendation based on resource type
+            if "disk" in resource_type:
+                issue = "Orphaned managed disk - not attached to any virtual machine"
+                recommendation = "Review if this disk contains important data. If not needed, delete to save storage costs (~$4-50/month depending on size and type)."
+                cost_estimate = "~$4-50/month"
+            elif "publicipaddress" in resource_type:
+                sku_name = resource.get("sku", {}).get("name", "")
+                issue = f"Orphaned public IP address ({sku_name} SKU) - not associated with any resource"
+                recommendation = "Delete unused public IP to save costs. Basic SKU: ~$3.65/month, Standard SKU varies by region."
+                cost_estimate = "~$3-15/month"
+            elif "networksecuritygroup" in resource_type:
+                issue = "Orphaned Network Security Group - not associated with any subnet or network interface"
+                recommendation = "Review and delete if not needed. NSGs don't incur direct costs but add management overhead."
+                cost_estimate = "No direct cost"
+            elif "networkinterface" in resource_type:
+                issue = "Orphaned Network Interface - not attached to any virtual machine"
+                recommendation = "Delete unused network interface. No direct cost but may hold IP addresses unnecessarily."
+                cost_estimate = "No direct cost"
+            elif "loadbalancer" in resource_type:
+                sku_name = resource.get("sku", {}).get("name", "")
+                issue = f"Orphaned Load Balancer ({sku_name} SKU) - no backend pools or rules configured"
+                recommendation = "Delete unused load balancer. Standard SKU incurs hourly charges (~$18/month)."
+                cost_estimate = "~$18/month for Standard"
+            elif "applicationgateway" in resource_type:
+                issue = "Orphaned Application Gateway - no backend address pools configured"
+                recommendation = "Delete unused Application Gateway. Significant cost (~$125-250/month) plus data processing fees."
+                cost_estimate = "~$125-250/month"
+            elif "storageaccount" in resource_type:
+                issue = "Potentially orphaned Storage Account - may be unused"
+                recommendation = "Review storage account usage. Check last access time and delete if confirmed unused. Costs vary by data stored and tier."
+                cost_estimate = "Varies by usage"
+            else:
+                issue = "Potentially orphaned resource - not in use by other resources"
+                recommendation = "Review resource usage and delete if confirmed unused to save costs."
+                cost_estimate = "Varies"
+            
+            orphaned_findings.append({
+                "resourceId": resource_id,
+                "resourceName": resource_name,
+                "resourceType": resource.get("type", ""),
+                "location": resource.get("location", ""),
+                "resourceGroup": resource.get("resourceGroup", ""),
+                "issue": f"{issue} - Basic analysis without AI",
+                "recommendation": f"{recommendation} Note: Advanced AI analysis unavailable - verify before deletion.",
+                "estimatedMonthlyCost": cost_estimate,
+                "priority": "Medium"
+            })
+        
+        return orphaned_findings
     
     # Initialize OpenAI client
     client = OpenAI(api_key=openai_key)
     
-    prompt = (
-        "Given these Azure managed disks (JSON list), identify which are truly orphaned (unused) and explain why. "
-        "For each orphaned disk, return a JSON object with: resourceId, resourceName, resourceType, location, resourceGroup, issue, recommendation. "
-        "Return as a JSON array:\n"
-        f"{json.dumps(disks, indent=2)}"
-    )
+    prompt = f"""
+You are an Azure cloud optimization expert with deep knowledge of Azure resource management and cost optimization.
+
+TASK: Analyze the following Azure resources and identify which are truly orphaned/unused and costing money unnecessarily.
+
+AZURE ORPHANED RESOURCE EXPERTISE:
+- Managed Disks: Orphaned if managedBy is null/empty (not attached to VMs)
+- Public IPs: Orphaned if ipConfiguration is null/empty (not associated with resources)
+- Network Security Groups: Orphaned if no subnets or network interfaces associated
+- Network Interfaces: Orphaned if virtualMachine is null/empty (not attached to VMs)
+- Storage Accounts: May be orphaned if unused for extended periods
+- Load Balancers: Orphaned if no backend pools or load balancing rules
+- Application Gateways: Orphaned if no backend address pools configured
+- Availability Sets: Orphaned if no virtual machines assigned
+
+COST IMPACT KNOWLEDGE:
+- Managed Disks: Charged for storage capacity (Premium SSD > Standard SSD > Standard HDD)
+- Public IPs: Basic SKU ~$3.65/month, Standard SKU varies by region
+- Storage Accounts: Charged for storage used, transactions, and redundancy level
+- Load Balancers: Basic is free, Standard has hourly charges
+- Application Gateways: Significant hourly charges + data processing fees
+
+For each truly orphaned resource, return a JSON object with:
+- resourceId: Full Azure resource ID
+- resourceName: Resource name
+- resourceType: Azure resource type
+- location: Azure region
+- resourceGroup: Resource group name
+- issue: Specific reason why it's orphaned and costing money
+- recommendation: Detailed action to take (delete, modify, or investigate)
+- estimatedMonthlyCost: Rough monthly cost estimate if available
+- priority: High/Medium/Low based on cost impact
+
+RESOURCES TO ANALYZE:
+{json.dumps(disks, indent=2)}
+
+Return ONLY a JSON array of truly orphaned resources that are costing money unnecessarily. If no resources are orphaned, return an empty array [].
+"""
     
     try:
         logger.info("🤖 Analyzing orphaned resources with OpenAI...")
         response = client.chat.completions.create(
             model="gpt-4",  # Use gpt-4 instead of gpt-4o if not available
             messages=[
-                {"role": "system", "content": "You are an Azure cloud optimization expert. Analyze resources and return structured JSON responses."},
+                {"role": "system", "content": "You are an Azure cloud cost optimization expert with comprehensive knowledge of Azure resource relationships, dependencies, and cost structures. You specialize in identifying truly orphaned resources that are unnecessarily costing money."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=2000,
+            max_tokens=3000,
             temperature=0.0
         )
         

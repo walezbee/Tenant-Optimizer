@@ -22,12 +22,35 @@ async def detect_deprecated_resources(user_token, subscriptions):
         "Content-Type": "application/json"
     }
     
-    # Query for various resource types that commonly have deprecated versions
+    # Comprehensive query for resources that might be deprecated/retired
     query = """
     Resources
-    | where type in~ ('microsoft.compute/virtualmachines', 'microsoft.web/sites', 'microsoft.sql/servers/databases', 'microsoft.storage/storageaccounts', 'microsoft.containerservice/managedclusters')
-    | project id, name, type, kind, sku, location, resourceGroup, properties, tags
-    | limit 100
+    | where type in~ (
+        'microsoft.network/publicipaddresses',
+        'microsoft.compute/virtualmachines',
+        'microsoft.network/loadbalancers',
+        'microsoft.network/applicationgateways', 
+        'microsoft.storage/storageaccounts',
+        'microsoft.sql/servers',
+        'microsoft.sql/servers/databases',
+        'microsoft.compute/availabilitysets',
+        'microsoft.network/networksecuritygroups',
+        'microsoft.compute/virtualmachinescalesets',
+        'microsoft.containerservice/managedclusters',
+        'microsoft.network/virtualnetworks',
+        'microsoft.keyvault/vaults',
+        'microsoft.insights/components',
+        'microsoft.web/sites',
+        'microsoft.cache/redis',
+        'microsoft.servicebus/namespaces',
+        'microsoft.eventhub/namespaces'
+    )
+    | extend skuName = sku.name, skuTier = sku.tier
+    | extend apiVersion = properties.apiVersion
+    | extend vmSize = properties.hardwareProfile.vmSize
+    | extend osVersion = properties.storageProfile.imageReference.version
+    | project id, name, type, kind, location, resourceGroup, skuName, skuTier, apiVersion, vmSize, osVersion, sku, tags, properties
+    | limit 150
     """
     
     payload = {
@@ -99,25 +122,77 @@ async def detect_deprecated_resources(user_token, subscriptions):
     openai_key = os.getenv("OPENAI_KEY")
     if not openai_key or not openai_key.startswith("sk-"):
         logger.warning(f"⚠️ OpenAI API key {'not found' if not openai_key else 'invalid format'}, returning basic analysis")
-        # Return basic structured data without AI analysis
+        # Return comprehensive basic analysis without AI
         deprecated_resources = []
         for resource in resources:
             resource_type = resource.get("type", "").lower()
-            sku = str(resource.get("sku", {}))
+            sku_name = resource.get("skuName", "").lower() if resource.get("skuName") else ""
+            sku_tier = resource.get("skuTier", "").lower() if resource.get("skuTier") else ""
+            vm_size = resource.get("vmSize", "").lower() if resource.get("vmSize") else ""
             
-            # Basic heuristics for common deprecated patterns
+            # Enhanced deprecation detection based on Microsoft documentation
             issue = None
             recommendation = None
+            priority = "Medium"
             
-            if "basic" in sku.lower():
-                issue = "Using Basic SKU which may have limited features"
-                recommendation = "Consider upgrading to Standard SKU for better performance and features"
-            elif "v1" in sku.lower() or "classic" in resource_type:
-                issue = "Using legacy/classic resource version"
-                recommendation = "Migrate to newer resource version for better security and features"
-            elif "microsoft.sql" in resource_type and "databases" in resource_type:
-                issue = "SQL Database - check compatibility level"
-                recommendation = "Ensure database compatibility level is current"
+            # Public IP Addresses
+            if "publicipaddress" in resource_type and "basic" in sku_name:
+                issue = "Using Basic SKU Public IP - Microsoft is retiring Basic SKU Public IPs"
+                recommendation = "Migrate to Standard SKU Public IP immediately. Basic SKUs will be retired by September 2025."
+                priority = "Critical"
+            
+            # Virtual Machines
+            elif "virtualmachine" in resource_type:
+                if vm_size and ("a0" in vm_size or "a1" in vm_size or "a2" in vm_size):
+                    issue = "Using deprecated A-series VM size"
+                    recommendation = "Migrate to newer VM series (B, D, or F series) for better performance and support."
+                    priority = "High"
+                elif "d1" in vm_size or "d2" in vm_size:
+                    issue = "Using D-series v1 which is deprecated"
+                    recommendation = "Upgrade to D-series v2 or newer (Dv3, Dv4, Dv5) for better performance."
+                    priority = "High"
+            
+            # Load Balancers
+            elif "loadbalancer" in resource_type and "basic" in sku_name:
+                issue = "Using Basic SKU Load Balancer - being deprecated by Microsoft"
+                recommendation = "Migrate to Standard SKU Load Balancer for enhanced features and future support."
+                priority = "High"
+                
+            # Application Gateways
+            elif "applicationgateway" in resource_type and ("v1" in sku_name or "standard" in sku_name):
+                issue = "Using Application Gateway v1 which is deprecated"
+                recommendation = "Migrate to Application Gateway v2 (Standard_v2 or WAF_v2) for better performance and features."
+                priority = "High"
+            
+            # Storage Accounts
+            elif "storageaccount" in resource_type:
+                if "standard_lrs" in sku_name and "v1" in str(resource.get("kind", "")).lower():
+                    issue = "Using Storage Account v1 which has limited features"
+                    recommendation = "Upgrade to Storage Account v2 (StorageV2) for better features and performance tiers."
+                    priority = "Medium"
+            
+            # AKS Clusters
+            elif "managedcluster" in resource_type:
+                # Note: Would need to check Kubernetes version from properties
+                issue = "AKS cluster may be using deprecated Kubernetes version"
+                recommendation = "Check and upgrade to latest supported Kubernetes version. Versions older than 1.24 are deprecated."
+                priority = "High"
+                
+            # SQL Databases
+            elif "databases" in resource_type and "basic" in sku_tier:
+                issue = "Using Basic tier SQL Database with limited features"
+                recommendation = "Consider upgrading to Standard or Premium tier, or migrate to vCore model for better performance."
+                priority = "Medium"
+                
+            # Generic checks
+            elif "basic" in sku_name or "basic" in sku_tier:
+                issue = f"Using Basic SKU/tier which may have limitations or deprecation timeline"
+                recommendation = "Review if Basic tier meets requirements. Consider Standard tier for production workloads."
+                priority = "Medium"
+            elif "v1" in sku_name or "classic" in resource_type:
+                issue = "Using legacy/v1 resource version"
+                recommendation = "Migrate to newer resource version for better security, features, and support."
+                priority = "High"
             
             if issue:
                 deprecated_resources.append({
@@ -126,19 +201,81 @@ async def detect_deprecated_resources(user_token, subscriptions):
                     "resourceType": resource.get("type", ""),
                     "location": resource.get("location", ""),
                     "resourceGroup": resource.get("resourceGroup", ""),
-                    "issue": issue,
-                    "recommendation": recommendation
+                    "issue": f"{issue} - Basic analysis without AI",
+                    "recommendation": f"{recommendation} Note: Advanced AI analysis unavailable - verify current Microsoft documentation.",
+                    "priority": priority,
+                    "migrationComplexity": "Medium"
                 })
         
         return deprecated_resources if deprecated_resources else []
 
-    prompt = (
-        "You are an Azure cloud optimization expert. "
-        "Given the following list of Azure resources, identify those that are deprecated or outdated. "
-        "For each deprecated/outdated resource, return a JSON object with: resourceId, resourceName, resourceType, location, resourceGroup, issue, recommendation. "
-        "Return your response as a JSON array.\n\n"
-        f"Resources:\n{json.dumps(resources, indent=2)}"
-    )
+    prompt = f"""
+You are an Azure cloud optimization expert with comprehensive knowledge of Microsoft's deprecation timeline and service retirement announcements.
+
+TASK: Analyze the following Azure resources and identify those using deprecated/retired services, SKUs, or configurations.
+
+MICROSOFT AZURE DEPRECATION KNOWLEDGE (as of 2025):
+
+PUBLIC IP ADDRESSES:
+- Basic SKU Public IPs: Deprecated/retiring - migrate to Standard SKU
+- IPv4 Public IPs: Still supported but consider IPv6 for future-proofing
+- Classic deployment model IPs: Fully retired
+
+VIRTUAL MACHINES:
+- Classic VMs: Fully retired (migrated to ARM)
+- A-series (A0-A7): Deprecated - migrate to newer series
+- D-series v1: Deprecated - migrate to v2 or newer
+- Old OS versions: Windows Server 2008/2012 reaching end of support
+- VM sizes with <2GB RAM: Often deprecated
+
+LOAD BALANCERS:
+- Basic SKU Load Balancers: Being deprecated - migrate to Standard SKU
+- Classic Load Balancers: Fully retired
+
+STORAGE ACCOUNTS:
+- Classic Storage Accounts: Fully retired
+- Storage Account v1: Deprecated - upgrade to v2
+- Cool/Archive access tiers: Still supported but consider newer tiers
+
+SQL SERVICES:
+- SQL Database compatibility levels <140: Deprecated
+- Basic/Standard tiers in some regions: Being phased out
+- DTU-based pricing: Deprecated in favor of vCore
+
+APPLICATION GATEWAYS:
+- v1 SKU: Deprecated - migrate to v2
+- Classic deployment model: Fully retired
+
+CONTAINER SERVICES:
+- AKS versions <1.24: Deprecated
+- Container Instances without managed identity: Security deprecation
+
+NETWORKING:
+- Classic VNets: Fully retired
+- NSG rules without proper segmentation: Security deprecation
+- ExpressRoute circuits <1Gbps: Some deprecated
+
+KEY VAULTS:
+- Vault access policies: Being deprecated in favor of RBAC
+- Older API versions: Some deprecated
+
+For each deprecated/retired resource found, return a JSON object with:
+- resourceId: Full Azure resource ID
+- resourceName: Resource name  
+- resourceType: Azure resource type
+- location: Azure region
+- resourceGroup: Resource group name
+- issue: Specific deprecation issue with timeline if known
+- recommendation: Detailed migration/upgrade path
+- priority: Critical/High/Medium based on retirement timeline
+- migrationComplexity: Low/Medium/High
+- estimatedMigrationTime: Rough time estimate
+
+RESOURCES TO ANALYZE:
+{json.dumps(resources, indent=2)}
+
+Return ONLY a JSON array of resources using deprecated/retired services. If no deprecated resources found, return empty array [].
+"""
 
     # Initialize OpenAI client
     client = OpenAI(api_key=openai_key)
@@ -148,10 +285,10 @@ async def detect_deprecated_resources(user_token, subscriptions):
         response = client.chat.completions.create(
             model="gpt-4",  # Use gpt-4 instead of gpt-4o if not available
             messages=[
-                {"role": "system", "content": "You are a helpful Azure cloud optimization expert. Analyze resources and return structured JSON responses."},
+                {"role": "system", "content": "You are an Azure cloud architect and optimization expert with deep knowledge of Microsoft's service deprecation timeline, retirement announcements, and migration best practices. You stay current with Microsoft documentation and deprecation notices."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=2000,
+            max_tokens=3000,
             temperature=0.0
         )
         
