@@ -221,15 +221,44 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
         if subscriptions:
             data["subscriptions"] = subscriptions
         
+        logger.info(f"🔍 Scanning for orphaned resources in {len(subscriptions) if subscriptions else 'all'} subscriptions")
+        
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 result = response.json()
-                resources = result.get("data", [])
+                
+                # Parse Resource Graph response format properly
+                data_content = result.get("data", {})
+                resources = []
+                
+                if isinstance(data_content, dict):
+                    # Standard Resource Graph format with rows and columns
+                    rows = data_content.get("rows", [])
+                    columns = data_content.get("columns", [])
+                    
+                    logger.info(f"📊 Found {len(rows)} rows with {len(columns)} columns")
+                    
+                    if columns and rows:
+                        column_names = [col["name"] for col in columns]
+                        for row in rows:
+                            resource_dict = dict(zip(column_names, row))
+                            resources.append(resource_dict)
+                elif isinstance(data_content, list):
+                    # Direct list format (fallback)
+                    resources = data_content
+                
+                logger.info(f"📊 Parsed {len(resources)} orphaned resources")
                 
                 # Format resources for frontend
                 formatted_resources = []
                 for resource in resources:
+                    disk_size = 0
+                    if 'properties_diskSizeGB' in resource:
+                        disk_size = resource.get('properties_diskSizeGB', 0)
+                    elif 'properties.diskSizeGB' in resource:
+                        disk_size = resource.get('properties.diskSizeGB', 0)
+                    
                     formatted_resources.append({
                         "id": resource.get("id", ""),
                         "name": resource.get("name", ""),
@@ -238,7 +267,7 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                         "location": resource.get("location", ""),
                         "subscriptionId": resource.get("subscriptionId", ""),
                         "priority": "Medium",
-                        "cost_impact": f"${resource.get('properties_diskSizeGB', 0) * 0.05:.2f}/month estimated",
+                        "cost_impact": f"${disk_size * 0.05:.2f}/month estimated",
                         "analysis": "Orphaned disk - not attached to any VM"
                     })
                 
@@ -251,6 +280,7 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                     "subscriptions_scanned": len(subscriptions) if subscriptions else "all"
                 }
             else:
+                logger.error(f"❌ Resource Graph API error: {response.status_code} - {response.text}")
                 return {
                     "success": False,
                     "message": f"Resource Graph API error: {response.status_code} - {response.text}",
@@ -296,11 +326,34 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         if subscriptions:
             data["subscriptions"] = subscriptions
         
+        logger.info(f"🔍 Scanning for deprecated resources in {len(subscriptions) if subscriptions else 'all'} subscriptions")
+        
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 result = response.json()
-                resources = result.get("data", [])
+                
+                # Parse Resource Graph response format properly
+                data_content = result.get("data", {})
+                resources = []
+                
+                if isinstance(data_content, dict):
+                    # Standard Resource Graph format with rows and columns
+                    rows = data_content.get("rows", [])
+                    columns = data_content.get("columns", [])
+                    
+                    logger.info(f"📊 Found {len(rows)} rows with {len(columns)} columns")
+                    
+                    if columns and rows:
+                        column_names = [col["name"] for col in columns]
+                        for row in rows:
+                            resource_dict = dict(zip(column_names, row))
+                            resources.append(resource_dict)
+                elif isinstance(data_content, list):
+                    # Direct list format (fallback)
+                    resources = data_content
+                
+                logger.info(f"📊 Parsed {len(resources)} deprecated resources")
                 
                 # Format resources for frontend
                 formatted_resources = []
@@ -338,6 +391,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     "subscriptions_scanned": len(subscriptions) if subscriptions else "all"
                 }
             else:
+                logger.error(f"❌ Resource Graph API error: {response.status_code} - {response.text}")
                 return {
                     "success": False,
                     "message": f"Resource Graph API error: {response.status_code} - {response.text}",
