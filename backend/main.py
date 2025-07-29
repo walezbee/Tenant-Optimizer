@@ -110,9 +110,10 @@ def health_check():
     return {
         "status": "ok",
         "message": "Tenant Optimizer API is running",
-        "version": "1.0.1",
-        "timestamp": "2025-07-29-auth-fix",
-        "deployment_test": "active"
+        "version": "1.0.2",
+        "timestamp": "2025-07-29-openai-fix",
+        "deployment_test": "active",
+        "openai_configured": bool(os.getenv("OPENAI_KEY"))
     }
 
 @app.get("/user")
