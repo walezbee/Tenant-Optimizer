@@ -451,7 +451,7 @@ function App() {
       return;
     }
 
-    if (!confirm(`Are you sure you want to upgrade this resource?\n\nResource: ${resourceId}\nUpgrade Type: ${upgradeType}\n\nThis will modify the resource configuration.`)) {
+    if (!confirm(`Are you sure you want to upgrade this resource?\n\nResource: ${resourceId}\nUpgrade Type: ${upgradeType}\n\nThis will use automated agents to safely upgrade the resource.`)) {
       return;
     }
 
@@ -466,63 +466,106 @@ function App() {
       
       const data = await resp.json();
       if (!resp.ok) {
-        setError(`Resource upgrade failed: ${JSON.stringify(data)}`);
+        setError(`Automated upgrade failed: ${JSON.stringify(data)}`);
         return;
       }
 
-      if (data.manualUpgradeRequired) {
-        // Show detailed manual upgrade instructions
-        let message = `Manual upgrade required!\n\nResource: ${resourceId}\n\n${data.message}`;
+      // Handle automated upgrade success
+      if (data.success && data.automationDetails) {
+        let message = `🎉 ${data.message}\n\n`;
+        message += `🤖 Automation Details:\n`;
+        message += `• Agent Used: ${data.automationDetails.agent_used}\n`;
+        message += `• Automation Level: ${data.automationDetails.automation_level}\n`;
+        message += `• Manual Intervention: ${data.automationDetails.manual_intervention_required ? 'Required' : 'Not Required'}\n\n`;
         
-        if (data.upgradeSteps) {
-          message += "\n\nUpgrade Steps:";
-          data.upgradeSteps.forEach((step: string, index: number) => {
-            message += `\n${index + 1}. ${step}`;
+        if (data.automationDetails.steps_completed) {
+          message += `✅ Steps Completed:\n`;
+          data.automationDetails.steps_completed.forEach((step: string) => {
+            message += `${step}\n`;
           });
         }
         
-        if (data.attachedTo) {
-          message += `\n\nCurrently attached to: ${data.attachedTo}`;
-        }
-        
-        if (data.azurePortalUrl) {
-          message += `\n\nAzure Portal Link: ${data.azurePortalUrl}`;
+        if (data.upgradeDetails) {
+          message += `\n📊 Upgrade Details:\n`;
+          Object.entries(data.upgradeDetails).forEach(([key, value]) => {
+            message += `• ${key}: ${value}\n`;
+          });
         }
         
         alert(message);
         
-        // For Public IPs that are in use, show a special message
+        // Refresh scan results to show updated state
+        await handleScanDeprecated();
+        return;
+      }
+
+      // Handle skipped upgrades (already optimal)
+      if (data.success && data.skipped) {
+        alert(`✅ ${data.message}\n\nResource: ${resourceId}\n\nNo upgrade was needed - the resource is already optimally configured.`);
+        return;
+      }
+
+      // Handle manual upgrade requirements (fallback)
+      if (data.manualUpgradeRequired) {
+        let message = `🔧 Manual upgrade required!\n\nResource: ${resourceId}\n\n${data.message}`;
+        
+        if (data.reason) {
+          message += `\n\n📋 Reason: ${data.reason}`;
+        }
+        
+        if (data.upgradeSteps || data.detailedSteps) {
+          const steps = data.detailedSteps || data.upgradeSteps;
+          message += "\n\n📝 Upgrade Steps:";
+          steps.forEach((step: string, index: number) => {
+            message += `\n${index + 1}. ${step}`;
+          });
+        }
+        
+        if (data.alternativeOption) {
+          message += `\n\n💡 Alternative: ${data.alternativeOption}`;
+        }
+        
         if (data.attachedTo) {
+          message += `\n\n🔗 Currently attached to: ${data.attachedTo}`;
+        }
+        
+        if (data.errorContext) {
+          message += `\n\n⚠️ Context: ${data.errorContext}`;
+        }
+        
+        alert(message);
+        
+        // Offer to open Azure Portal
+        if (data.azurePortalUrl) {
           const shouldOpenPortal = confirm("Would you like to open Azure Portal to perform the manual upgrade?");
-          if (shouldOpenPortal && data.azurePortalUrl) {
+          if (shouldOpenPortal) {
             window.open(data.azurePortalUrl, '_blank');
           }
         }
-      } else if (data.alreadyUpgraded) {
-        alert(`Resource is already upgraded!\n\nResource: ${resourceId}\n${data.message}`);
-        
-        // Remove from deprecated results since it's already upgraded
-        setScanResults(prev => ({
-          ...prev,
-          deprecated: prev.deprecated?.filter(r => r.resourceId !== resourceId) || []
-        }));
-      } else {
-        // Remove the upgraded resource from deprecated results
-        setScanResults(prev => ({
-          ...prev,
-          deprecated: prev.deprecated?.filter(r => r.resourceId !== resourceId) || []
-        }));
+        return;
+      }
 
-        let successMessage = `Resource upgrade completed successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`;
+      // Handle general success
+      if (data.success) {
+        let message = `✅ Resource upgrade completed successfully!\n\nResource: ${resourceId}`;
         
-        if (data.upgradedFrom && data.upgradedTo) {
-          successMessage += `\nUpgraded from: ${data.upgradedFrom}\nUpgraded to: ${data.upgradedTo}`;
+        if (data.status === "upgraded") {
+          message += `\n\nUpgraded from: ${data.upgradedFrom}\nUpgraded to: ${data.upgradedTo}`;
         }
         
-        alert(successMessage);
+        alert(message);
+        
+        // Refresh scan results to show updated state
+        await handleScanDeprecated();
+        return;
       }
-    } catch (e: any) {
-      setError(`Error upgrading resource: ${e.message || e.toString()}`);
+
+      // Handle other failure cases
+      setError(`Upgrade failed: ${data.message || 'Unknown error'}`);
+
+    } catch (error) {
+      console.error("Upgrade error:", error);
+      setError(`Network error during upgrade: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setLoading(false);
     }

@@ -283,7 +283,8 @@ async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(ver
 @app.post("/api/resources/upgrade")
 async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """
-    Upgrade a deprecated Azure resource with intelligent handling of complex scenarios.
+    Automated upgrade of Azure resources using specialized agents.
+    Handles complex scenarios including dependency management and rollback.
     Expected payload: {"resourceId": "full-azure-resource-id", "upgradeType": "sku-upgrade|version-upgrade"}
     """
     try:
@@ -293,211 +294,244 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
         if not resource_id:
             raise HTTPException(status_code=400, detail="Resource ID is required")
         
-        logger.info(f"⬆️ Upgrading resource: {resource_id} (type: {upgrade_type})")
+        logger.info(f"🤖 Starting automated upgrade: {resource_id} (type: {upgrade_type})")
         
-        # First, get the current resource configuration
+        # Extract subscription ID from token or resource ID
+        subscription_id = await extract_subscription_id(user_info['token'], resource_id)
+        if not subscription_id:
+            raise HTTPException(status_code=400, detail="Could not determine subscription ID")
+        
+        # Use the automated upgrade orchestrator
+        from agents.upgrade_orchestrator import upgrade_resource_automated
+        
+        # Set up Azure credentials using the user's token
+        import os
+        os.environ['AZURE_ACCESS_TOKEN'] = user_info['token']
+        
+        upgrade_result = await upgrade_resource_automated(subscription_id, resource_id)
+        
+        if upgrade_result.get('success', False):
+            logger.info(f"✅ Automated upgrade completed successfully: {resource_id}")
+            
+            # Enhanced response for successful automated upgrades
+            response = {
+                "success": True,
+                "message": "🎉 Automated upgrade completed successfully!",
+                "resourceId": resource_id,
+                "automationDetails": {
+                    "agent_used": upgrade_result.get('orchestration', {}).get('agent_used', 'Unknown'),
+                    "automation_level": "Full",
+                    "steps_completed": upgrade_result.get('steps_completed', []),
+                    "manual_intervention_required": False
+                },
+                "upgradeDetails": upgrade_result.get('upgrade_details', {}),
+                "status": "automated_upgrade_completed"
+            }
+            
+            # Add specific messaging based on resource type
+            resource_type = upgrade_result.get('orchestration', {}).get('resource_type', '')
+            if 'publicIPAddresses' in resource_type:
+                response["message"] = "🎉 Public IP automatically upgraded! All associations preserved."
+            elif 'loadBalancers' in resource_type:
+                response["message"] = "🎉 Load Balancer automatically upgraded! All configurations preserved."
+            elif 'storageAccounts' in resource_type:
+                response["message"] = "🎉 Storage Account automatically optimized! Performance improved."
+                
+            return response
+            
+        elif upgrade_result.get('skipped', False):
+            logger.info(f"⏭️ Upgrade skipped (already optimal): {resource_id}")
+            return {
+                "success": True,
+                "message": upgrade_result.get('message', 'Resource is already optimally configured'),
+                "resourceId": resource_id,
+                "skipped": True,
+                "status": "no_upgrade_needed"
+            }
+            
+        else:
+            # Automated upgrade failed, fall back to manual guidance
+            error_message = upgrade_result.get('error', 'Unknown error')
+            logger.warning(f"⚠️ Automated upgrade failed, providing manual guidance: {error_message}")
+            
+            # Check if this is a known constraint issue that requires manual steps
+            if any(constraint in error_message.lower() for constraint in 
+                   ['in use', 'cannot update', 'attached', 'associated']):
+                
+                return await provide_manual_upgrade_guidance(resource_id, user_info['token'], error_message)
+            
+            # For other failures, return the error
+            return {
+                "success": False,
+                "message": f"Automated upgrade failed: {error_message}",
+                "resourceId": resource_id,
+                "error": error_message,
+                "fallback_available": True
+            }
+                
+    except Exception as e:
+        logger.error(f"❌ Automated upgrade system error: {str(e)}")
+        
+        # If automated system fails completely, fall back to manual guidance
+        try:
+            return await provide_manual_upgrade_guidance(resource_id, user_info['token'], str(e))
+        except:
+            raise HTTPException(status_code=500, detail=f"Upgrade system failed: {str(e)}")
+
+async def extract_subscription_id(token: str, resource_id: str) -> Optional[str]:
+    """Extract subscription ID from resource ID or validate with Azure."""
+    try:
+        # First, try to extract from resource ID
+        parts = resource_id.strip('/').split('/')
+        if len(parts) >= 2 and parts[0] == 'subscriptions':
+            return parts[1]
+        
+        # If not found in resource ID, return None to trigger error
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to extract subscription ID: {str(e)}")
+        return None
+
+async def provide_manual_upgrade_guidance(resource_id: str, token: str, error_context: str) -> Dict[str, Any]:
+    """Provide detailed manual upgrade guidance when automation fails."""
+    try:
+        # Get resource details for context
         url = f"https://management.azure.com{resource_id}?api-version=2021-04-01"
-        headers = {"Authorization": f"Bearer {user_info['token']}"}
+        headers = {"Authorization": f"Bearer {token}"}
         
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.get(url, headers=headers)
             
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Failed to get resource details: {response.text}"
-                )
+            if response.status_code == 200:
+                resource_data = response.json()
+                resource_type = resource_data.get("type", "").lower()
+                resource_name = resource_data.get("name", "")
+                
+                if "publicipaddress" in resource_type:
+                    return {
+                        "success": False,
+                        "message": "Manual upgrade required!",
+                        "resourceId": resource_id,
+                        "resourceType": "microsoft.network/publicipaddresses",
+                        "manualUpgradeRequired": True,
+                        "reason": "Public IP cannot be upgraded while in use. To upgrade this Public IP:",
+                        "upgradeSteps": [
+                            "1. Dissociate it from the attached resource (Network Interface, Load Balancer, etc.)",
+                            "2. Upgrade the SKU to Standard", 
+                            "3. Re-associate it with the resource"
+                        ],
+                        "detailedSteps": [
+                            "Navigate to Azure Portal",
+                            "Open the Public IP resource",
+                            "Dissociate from attached resources", 
+                            "Change SKU from Basic to Standard",
+                            "Re-associate with resources"
+                        ],
+                        "alternativeOption": "Alternatively, create a new Standard SKU Public IP and replace the existing one.",
+                        "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}",
+                        "errorContext": error_context
+                    }
+                
+                elif "loadbalancer" in resource_type:
+                    return {
+                        "success": False,
+                        "message": "Manual Load Balancer upgrade guidance",
+                        "resourceId": resource_id,
+                        "resourceType": "microsoft.network/loadbalancers",
+                        "manualUpgradeRequired": True,
+                        "upgradeSteps": [
+                            "1. Ensure all associated Public IPs are Standard SKU",
+                            "2. Upgrade the Load Balancer SKU to Standard",
+                            "3. Verify all frontend and backend configurations"
+                        ],
+                        "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}",
+                        "errorContext": error_context
+                    }
+        
+        # Generic fallback
+        return {
+            "success": False,
+            "message": "Manual upgrade required - automated system encountered constraints",
+            "resourceId": resource_id,
+            "manualUpgradeRequired": True,
+            "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}",
+            "errorContext": error_context,
+            "recommendation": "Please review the resource in Azure Portal and apply upgrades manually"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to provide manual guidance: {str(e)}")
+        return {
+            "success": False,
+            "message": "Upgrade guidance unavailable",
+            "resourceId": resource_id,
+            "error": str(e)
+        }
+
+@app.post("/api/resources/upgrade-batch")
+async def upgrade_multiple_resources(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """
+    Automated batch upgrade of multiple Azure resources with dependency resolution.
+    Expected payload: {"resources": [{"id": "resource-id", "type": "optional-type"}]}
+    """
+    try:
+        resources = payload.get("resources", [])
+        if not resources:
+            raise HTTPException(status_code=400, detail="No resources provided for batch upgrade")
+        
+        logger.info(f"🚀 Starting batch automated upgrade for {len(resources)} resources")
+        
+        # Extract subscription ID from first resource
+        first_resource_id = resources[0].get("id", "")
+        subscription_id = await extract_subscription_id(user_info['token'], first_resource_id)
+        if not subscription_id:
+            raise HTTPException(status_code=400, detail="Could not determine subscription ID")
+        
+        # Use the automated upgrade orchestrator for batch processing
+        from agents.upgrade_orchestrator import upgrade_multiple_resources_automated
+        
+        # Set up Azure credentials using the user's token
+        import os
+        os.environ['AZURE_ACCESS_TOKEN'] = user_info['token']
+        
+        batch_result = await upgrade_multiple_resources_automated(subscription_id, resources)
+        
+        if batch_result.get('success', False):
+            logger.info(f"✅ Batch automated upgrade completed: {batch_result['successful_upgrades']}/{batch_result['total_resources']} successful")
             
-            resource_data = response.json()
-            resource_type = resource_data.get("type", "").lower()
-            resource_name = resource_data.get("name", "")
-            
-            logger.info(f"🔍 Resource type: {resource_type}, Name: {resource_name}")
-            
-            if "publicipaddress" in resource_type:
-                return await upgrade_public_ip(client, resource_id, resource_data, headers, logger)
-            elif "loadbalancer" in resource_type:
-                return await upgrade_load_balancer(client, resource_id, resource_data, headers, logger)
-            elif "storageaccount" in resource_type:
-                return await upgrade_storage_account(client, resource_id, resource_data, headers, logger)
-            else:
-                logger.warning(f"⚠️ Upgrade not implemented for resource type: {resource_type}")
-                return {
-                    "success": False,
-                    "message": f"Upgrade not yet implemented for {resource_type}. Please upgrade manually using Azure Portal.",
-                    "resourceId": resource_id,
-                    "resourceType": resource_type,
-                    "manualUpgradeRequired": True,
-                    "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}"
-                }
+            return {
+                "success": True,
+                "message": f"🎉 Batch upgrade completed! {batch_result['successful_upgrades']} of {batch_result['total_resources']} resources upgraded successfully.",
+                "batchResults": {
+                    "total_resources": batch_result['total_resources'],
+                    "successful_upgrades": batch_result['successful_upgrades'],
+                    "failed_upgrades": batch_result['failed_upgrades'],
+                    "skipped_upgrades": batch_result['skipped_upgrades'],
+                    "individual_results": batch_result['individual_results']
+                },
+                "automationDetails": {
+                    "dependency_resolution": "Enabled",
+                    "automation_level": "Full",
+                    "batch_processing": True
+                },
+                "status": "batch_upgrade_completed"
+            }
+        else:
+            logger.warning(f"⚠️ Batch upgrade had issues: {batch_result.get('error', 'Unknown error')}")
+            return {
+                "success": False,
+                "message": f"Batch upgrade encountered issues: {batch_result.get('error', 'Unknown error')}",
+                "batchResults": batch_result,
+                "partialSuccess": batch_result.get('successful_upgrades', 0) > 0
+            }
                 
     except Exception as e:
-        logger.error(f"❌ Resource upgrade error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upgrade failed: {str(e)}")
+        logger.error(f"❌ Batch automated upgrade system error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch upgrade system failed: {str(e)}")
 
-async def upgrade_public_ip(client, resource_id, resource_data, headers, logger):
-    """
-    Upgrade Public IP from Basic to Standard SKU.
-    Handles the scenario where the IP is in use by checking associations.
-    """
-    try:
-        current_sku = resource_data.get("sku", {}).get("name", "").lower()
-        if current_sku != "basic":
-            return {
-                "success": False,
-                "message": f"Public IP is already using {current_sku.title()} SKU, no upgrade needed.",
-                "resourceId": resource_id,
-                "alreadyUpgraded": True
-            }
-        
-        # Check if the Public IP is currently in use
-        ip_config = resource_data.get("properties", {}).get("ipConfiguration")
-        if ip_config:
-            logger.warning(f"⚠️ Public IP is in use by: {ip_config.get('id', 'unknown resource')}")
-            
-            return {
-                "success": False,
-                "message": "Public IP cannot be upgraded while in use. To upgrade this Public IP:\n\n1. Dissociate it from the attached resource (Network Interface, Load Balancer, etc.)\n2. Upgrade the SKU to Standard\n3. Re-associate it with the resource\n\nAlternatively, create a new Standard SKU Public IP and replace the existing one.",
-                "resourceId": resource_id,
-                "resourceType": "microsoft.network/publicipaddresses",
-                "manualUpgradeRequired": True,
-                "upgradeSteps": [
-                    "Navigate to Azure Portal",
-                    "Open the Public IP resource", 
-                    "Dissociate from attached resources",
-                    "Change SKU from Basic to Standard",
-                    "Re-associate with resources"
-                ],
-                "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}",
-                "attachedTo": ip_config.get('id', 'unknown resource')
-            }
-        
-        # If not in use, proceed with direct upgrade
-        upgraded_data = resource_data.copy()
-        upgraded_data["sku"]["name"] = "Standard"
-        
-        # Use the correct API version for Public IP addresses
-        api_url = f"https://management.azure.com{resource_id}?api-version=2023-04-01"
-        
-        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
-        
-        if put_response.status_code in [200, 201]:
-            logger.info(f"✅ Public IP upgraded from Basic to Standard SKU successfully")
-            return {
-                "success": True,
-                "message": "Public IP upgraded from Basic to Standard SKU successfully",
-                "resourceId": resource_id,
-                "resourceType": "microsoft.network/publicipaddresses",
-                "status": "upgraded",
-                "upgradedFrom": "Basic SKU",
-                "upgradedTo": "Standard SKU"
-            }
-        else:
-            error_detail = put_response.text
-            logger.error(f"❌ Public IP upgrade failed: {put_response.status_code} - {error_detail}")
-            
-            # Parse Azure error for better user feedback
-            if "PublicIPAddressInUseCannotUpdate" in error_detail:
-                return {
-                    "success": False,
-                    "message": "Public IP cannot be upgraded because it's currently in use. Please dissociate it from attached resources first, then try upgrading again.",
-                    "resourceId": resource_id,
-                    "manualUpgradeRequired": True,
-                    "azurePortalUrl": f"https://portal.azure.com/#@/resource{resource_id}"
-                }
-            
-            raise HTTPException(
-                status_code=put_response.status_code,
-                detail=f"Failed to upgrade Public IP: {error_detail}"
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Public IP upgrade error: {str(e)}")
-        raise e
-
-async def upgrade_load_balancer(client, resource_id, resource_data, headers, logger):
-    """
-    Upgrade Load Balancer from Basic to Standard SKU.
-    """
-    try:
-        current_sku = resource_data.get("sku", {}).get("name", "").lower()
-        if current_sku != "basic":
-            return {
-                "success": False,
-                "message": f"Load Balancer is already using {current_sku.title()} SKU, no upgrade needed.",
-                "resourceId": resource_id,
-                "alreadyUpgraded": True
-            }
-        
-        upgraded_data = resource_data.copy()
-        upgraded_data["sku"]["name"] = "Standard"
-        
-        api_url = f"https://management.azure.com{resource_id}?api-version=2023-04-01"
-        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
-        
-        if put_response.status_code in [200, 201]:
-            logger.info(f"✅ Load Balancer upgraded from Basic to Standard SKU successfully")
-            return {
-                "success": True,
-                "message": "Load Balancer upgraded from Basic to Standard SKU successfully",
-                "resourceId": resource_id,
-                "resourceType": "microsoft.network/loadbalancers",
-                "status": "upgraded",
-                "upgradedFrom": "Basic SKU",
-                "upgradedTo": "Standard SKU"
-            }
-        else:
-            logger.error(f"❌ Load Balancer upgrade failed: {put_response.status_code} - {put_response.text}")
-            raise HTTPException(
-                status_code=put_response.status_code,
-                detail=f"Failed to upgrade Load Balancer: {put_response.text}"
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Load Balancer upgrade error: {str(e)}")
-        raise e
-
-async def upgrade_storage_account(client, resource_id, resource_data, headers, logger):
-    """
-    Upgrade Storage Account from v1 to v2.
-    """
-    try:
-        current_kind = resource_data.get("kind", "").lower()
-        if current_kind not in ["storage", "storagev1"]:
-            return {
-                "success": False,
-                "message": f"Storage Account is already using {current_kind} kind, no upgrade needed.",
-                "resourceId": resource_id,
-                "alreadyUpgraded": True
-            }
-        
-        upgraded_data = resource_data.copy()
-        upgraded_data["kind"] = "StorageV2"
-        
-        api_url = f"https://management.azure.com{resource_id}?api-version=2023-01-01"
-        put_response = await client.put(api_url, headers=headers, json=upgraded_data)
-        
-        if put_response.status_code in [200, 201]:
-            logger.info(f"✅ Storage Account upgraded to v2 successfully")
-            return {
-                "success": True,
-                "message": "Storage Account upgraded to v2 successfully",
-                "resourceId": resource_id,
-                "resourceType": "microsoft.storage/storageaccounts",
-                "status": "upgraded",
-                "upgradedFrom": current_kind,
-                "upgradedTo": "StorageV2"
-            }
-        else:
-            logger.error(f"❌ Storage Account upgrade failed: {put_response.status_code} - {put_response.text}")
-            raise HTTPException(
-                status_code=put_response.status_code,
-                detail=f"Failed to upgrade Storage Account: {put_response.text}"
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Storage Account upgrade error: {str(e)}")
-        raise e
+# Automated upgrade system integrated above - old manual functions removed
+# The new system uses specialized agents for each resource type with full automation
 
 @app.get("/")
 def serve_index():
