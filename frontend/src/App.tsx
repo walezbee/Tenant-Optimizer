@@ -43,6 +43,18 @@ interface ScanResult {
   resourceGroup: string;
   issue: string;
   recommendation: string;
+  estimatedMonthlyCost?: string;
+  priority?: string;
+  actions?: Array<{
+    type: string;
+    description: string;
+    riskLevel: string;
+    confirmationRequired: boolean;
+    estimatedSavings?: string;
+    estimatedTimeToComplete?: string;
+  }>;
+  migrationComplexity?: string;
+  estimatedMigrationTime?: string;
 }
 
 function App() {
@@ -394,6 +406,88 @@ function App() {
     }
   };
 
+  const deleteResource = async (resourceId: string) => {
+    if (!armToken) {
+      setError("Azure ARM token is required for resource operations");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete this resource?\n\nResource: ${resourceId}\n\nThis action cannot be undone!`)) {
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+
+    try {
+      const resp = await fetchWithAuth("/api/resources/delete", armToken, {
+        method: "POST",
+        body: JSON.stringify({ resourceId }),
+      });
+      
+      const data = await resp.json();
+      if (!resp.ok) {
+        setError(`Resource deletion failed: ${JSON.stringify(data)}`);
+        return;
+      }
+
+      // Remove the deleted resource from the scan results
+      setScanResults(prev => ({
+        ...prev,
+        orphaned: prev.orphaned?.filter(r => r.resourceId !== resourceId) || []
+      }));
+
+      alert(`Resource deletion initiated successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
+    } catch (e: any) {
+      setError(`Error deleting resource: ${e.message || e.toString()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const upgradeResource = async (resourceId: string, upgradeType: string = "sku-upgrade") => {
+    if (!armToken) {
+      setError("Azure ARM token is required for resource operations");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to upgrade this resource?\n\nResource: ${resourceId}\nUpgrade Type: ${upgradeType}\n\nThis will modify the resource configuration.`)) {
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+
+    try {
+      const resp = await fetchWithAuth("/api/resources/upgrade", armToken, {
+        method: "POST",
+        body: JSON.stringify({ resourceId, upgradeType }),
+      });
+      
+      const data = await resp.json();
+      if (!resp.ok) {
+        setError(`Resource upgrade failed: ${JSON.stringify(data)}`);
+        return;
+      }
+
+      if (data.manualUpgradeRequired) {
+        alert(`Manual upgrade required!\n\nResource: ${resourceId}\nReason: ${data.message}\n\nPlease use Azure Portal to complete the upgrade.`);
+      } else {
+        // Remove the upgraded resource from deprecated results
+        setScanResults(prev => ({
+          ...prev,
+          deprecated: prev.deprecated?.filter(r => r.resourceId !== resourceId) || []
+        }));
+
+        alert(`Resource upgrade completed successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
+      }
+    } catch (e: any) {
+      setError(`Error upgrading resource: ${e.message || e.toString()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleManualConsent = async () => {
     const accounts = msalInstance.getAllAccounts();
     if (accounts.length === 0) {
@@ -540,11 +634,37 @@ function App() {
                             <div className="resource-name">{resource.resourceName}</div>
                             <div className="resource-type">{resource.resourceType}</div>
                             <div className="resource-location">{resource.location} • {resource.resourceGroup}</div>
+                            {resource.estimatedMonthlyCost && (
+                              <div className="resource-cost">💰 {resource.estimatedMonthlyCost}</div>
+                            )}
+                            {resource.priority && (
+                              <div className={`resource-priority priority-${resource.priority.toLowerCase()}`}>
+                                {resource.priority} Priority
+                              </div>
+                            )}
                           </div>
                           <div className="resource-issue">
                             <div className="issue">{resource.issue}</div>
                             <div className="recommendation">{resource.recommendation}</div>
                           </div>
+                          {resource.actions && resource.actions.length > 0 && (
+                            <div className="resource-actions">
+                              {resource.actions.map((action, actionIndex) => (
+                                <button
+                                  key={actionIndex}
+                                  className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
+                                  onClick={() => action.type === 'delete' ? deleteResource(resource.resourceId) : console.log('Action not implemented')}
+                                  disabled={loading}
+                                  title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedSavings ? ', Saves: ' + action.estimatedSavings : ''})`}
+                                >
+                                  {action.type === 'delete' ? '🗑️ Delete' : '⚡ ' + action.type}
+                                  {action.estimatedSavings && (
+                                    <span className="action-savings">💰 {action.estimatedSavings}</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -561,11 +681,42 @@ function App() {
                             <div className="resource-name">{resource.resourceName}</div>
                             <div className="resource-type">{resource.resourceType}</div>
                             <div className="resource-location">{resource.location} • {resource.resourceGroup}</div>
+                            {resource.priority && (
+                              <div className={`resource-priority priority-${resource.priority.toLowerCase()}`}>
+                                {resource.priority} Priority
+                              </div>
+                            )}
+                            {resource.migrationComplexity && (
+                              <div className="migration-complexity">
+                                🔧 {resource.migrationComplexity} Complexity
+                              </div>
+                            )}
                           </div>
                           <div className="resource-issue">
                             <div className="issue">{resource.issue}</div>
                             <div className="recommendation">{resource.recommendation}</div>
+                            {resource.estimatedMigrationTime && (
+                              <div className="migration-time">⏱️ Est. Time: {resource.estimatedMigrationTime}</div>
+                            )}
                           </div>
+                          {resource.actions && resource.actions.length > 0 && (
+                            <div className="resource-actions">
+                              {resource.actions.map((action, actionIndex) => (
+                                <button
+                                  key={actionIndex}
+                                  className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
+                                  onClick={() => action.type === 'upgrade' ? upgradeResource(resource.resourceId) : console.log('Action not implemented')}
+                                  disabled={loading}
+                                  title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedTimeToComplete ? ', Time: ' + action.estimatedTimeToComplete : ''})`}
+                                >
+                                  {action.type === 'upgrade' ? '⬆️ Upgrade' : '⚡ ' + action.type}
+                                  {action.estimatedTimeToComplete && (
+                                    <span className="action-time">⏱️ {action.estimatedTimeToComplete}</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

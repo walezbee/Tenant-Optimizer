@@ -233,6 +233,139 @@ async def scan_deprecated(payload: dict, user_info: Dict[str, Any] = Depends(ver
         logger.error(f"Deprecated scan error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
 
+@app.post("/api/resources/delete")
+async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """
+    Delete an orphaned Azure resource.
+    Expected payload: {"resourceId": "full-azure-resource-id"}
+    """
+    try:
+        resource_id = payload.get("resourceId")
+        if not resource_id:
+            raise HTTPException(status_code=400, detail="Resource ID is required")
+        
+        logger.info(f"🗑️ Deleting resource: {resource_id}")
+        
+        # Use Azure Resource Manager API to delete the resource
+        url = f"https://management.azure.com{resource_id}?api-version=2021-04-01"
+        headers = {"Authorization": f"Bearer {user_info['token']}"}
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.delete(url, headers=headers)
+            
+            if response.status_code == 200 or response.status_code == 202:
+                logger.info(f"✅ Resource deletion initiated successfully")
+                return {
+                    "success": True,
+                    "message": "Resource deletion initiated successfully",
+                    "resourceId": resource_id,
+                    "status": "deletion_initiated"
+                }
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ Resource not found (may already be deleted)")
+                return {
+                    "success": True,
+                    "message": "Resource not found (may already be deleted)",
+                    "resourceId": resource_id,
+                    "status": "not_found"
+                }
+            else:
+                logger.error(f"❌ Delete failed: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to delete resource: {response.text}"
+                )
+                
+    except Exception as e:
+        logger.error(f"❌ Resource deletion error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Deletion failed: {str(e)}")
+
+@app.post("/api/resources/upgrade")
+async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """
+    Upgrade a deprecated Azure resource.
+    Expected payload: {"resourceId": "full-azure-resource-id", "upgradeType": "sku-upgrade|version-upgrade"}
+    """
+    try:
+        resource_id = payload.get("resourceId")
+        upgrade_type = payload.get("upgradeType", "sku-upgrade")
+        
+        if not resource_id:
+            raise HTTPException(status_code=400, detail="Resource ID is required")
+        
+        logger.info(f"⬆️ Upgrading resource: {resource_id} (type: {upgrade_type})")
+        
+        # First, get the current resource configuration
+        url = f"https://management.azure.com{resource_id}?api-version=2021-04-01"
+        headers = {"Authorization": f"Bearer {user_info['token']}"}
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(url, headers=headers)
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to get resource details: {response.text}"
+                )
+            
+            resource_data = response.json()
+            resource_type = resource_data.get("type", "").lower()
+            
+            # Determine upgrade configuration based on resource type
+            upgraded_properties = resource_data.copy()
+            
+            if "publicipaddress" in resource_type:
+                # Upgrade Basic SKU to Standard SKU
+                if upgraded_properties.get("sku", {}).get("name", "").lower() == "basic":
+                    upgraded_properties["sku"]["name"] = "Standard"
+                    logger.info("🔄 Upgrading Public IP from Basic to Standard SKU")
+                    
+            elif "loadbalancer" in resource_type:
+                # Upgrade Basic SKU to Standard SKU
+                if upgraded_properties.get("sku", {}).get("name", "").lower() == "basic":
+                    upgraded_properties["sku"]["name"] = "Standard"
+                    logger.info("🔄 Upgrading Load Balancer from Basic to Standard SKU")
+                    
+            elif "storageaccount" in resource_type:
+                # Upgrade to StorageV2
+                if upgraded_properties.get("kind", "").lower() in ["storage", "storagev1"]:
+                    upgraded_properties["kind"] = "StorageV2"
+                    logger.info("🔄 Upgrading Storage Account to v2")
+                    
+            else:
+                # Generic upgrade - this is a placeholder for complex upgrades
+                logger.warning(f"⚠️ Upgrade not implemented for resource type: {resource_type}")
+                return {
+                    "success": False,
+                    "message": f"Upgrade not yet implemented for {resource_type}. Please upgrade manually using Azure Portal.",
+                    "resourceId": resource_id,
+                    "resourceType": resource_type,
+                    "manualUpgradeRequired": True
+                }
+            
+            # Apply the upgrade using PUT request
+            put_response = await client.put(url, headers=headers, json=upgraded_properties)
+            
+            if put_response.status_code == 200 or put_response.status_code == 201:
+                logger.info(f"✅ Resource upgrade completed successfully")
+                return {
+                    "success": True,
+                    "message": "Resource upgrade completed successfully",
+                    "resourceId": resource_id,
+                    "resourceType": resource_type,
+                    "status": "upgraded"
+                }
+            else:
+                logger.error(f"❌ Upgrade failed: {put_response.status_code} - {put_response.text}")
+                raise HTTPException(
+                    status_code=put_response.status_code,
+                    detail=f"Failed to upgrade resource: {put_response.text}"
+                )
+                
+    except Exception as e:
+        logger.error(f"❌ Resource upgrade error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upgrade failed: {str(e)}")
+
 @app.get("/")
 def serve_index():
     """Serve the main index page."""

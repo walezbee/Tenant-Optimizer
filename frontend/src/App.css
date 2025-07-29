@@ -440,3 +440,170 @@ body {
     padding: 1rem;
   }
 }
+
+/* New Resource Information Styles */
+.resource-cost {
+  color: #e74c3c;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.resource-priority {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  text-transform: uppercase;
+}
+
+.priority-critical {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  color: white;
+}
+
+.priority-high {
+  background: linear-gradient(135deg, #f39c12, #e67e22);
+  color: white;
+}
+
+.priority-medium {
+  background: linear-gradient(135deg, #f1c40f, #f39c12);
+  color: #2c3e50;
+}
+
+.priority-low {
+  background: linear-gradient(135deg, #27ae60, #2ecc71);
+  color: white;
+}
+
+.migration-complexity {
+  color: #7f8c8d;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.migration-time {
+  color: #3498db;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* Resource Actions */
+.resource-actions {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.action-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.action-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.action-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Delete Action Button */
+.action-delete {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  color: white;
+}
+
+.action-delete:hover:not(:disabled) {
+  background: linear-gradient(135deg, #c0392b, #a93226);
+}
+
+.action-delete.risk-high {
+  border: 2px solid #e74c3c;
+}
+
+.action-delete.risk-medium {
+  border: 2px solid #f39c12;
+}
+
+.action-delete.risk-low {
+  border: 2px solid #27ae60;
+}
+
+/* Upgrade Action Button */
+.action-upgrade {
+  background: linear-gradient(135deg, #3498db, #2980b9);
+  color: white;
+}
+
+.action-upgrade:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2980b9, #21618c);
+}
+
+.action-upgrade.risk-high {
+  border: 2px solid #e74c3c;
+}
+
+.action-upgrade.risk-medium {
+  border: 2px solid #f39c12;
+}
+
+.action-upgrade.risk-low {
+  border: 2px solid #27ae60;
+}
+
+/* Action Button Metadata */
+.action-savings {
+  font-size: 0.8rem;
+  opacity: 0.9;
+  margin-left: 0.25rem;
+}
+
+.action-time {
+  font-size: 0.8rem;
+  opacity: 0.9;
+  margin-left: 0.25rem;
+}
+
+/* Enhanced Result Items */
+.result-item {
+  position: relative;
+}
+
+.result-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+}
+
+.orphaned-item::before {
+  background: linear-gradient(180deg, #e74c3c, #c0392b);
+}
+
+.deprecated-item::before {
+  background: linear-gradient(180deg, #f39c12, #e67e22);
+}
