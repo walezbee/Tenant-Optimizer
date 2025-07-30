@@ -177,19 +177,45 @@ class PublicIPUpgradeAgent:
                     if not dissociation_result["success"]:
                         return dissociation_result
                     
-                    # Wait a moment for Azure to process the dissociation
-                    logger.info("⏳ Waiting for dissociation to complete...")
-                    import asyncio
-                    await asyncio.sleep(3)
+                    # Enhanced verification with multiple checks
+                    logger.info("🔍 Enhanced verification: Ensuring complete dissociation...")
                     
-                    # Verify dissociation by checking Public IP status again
-                    verify_response = await client.get(url, headers=headers)
-                    if verify_response.status_code == 200:
-                        verify_config = verify_response.json()
-                        if verify_config.get("properties", {}).get("ipConfiguration"):
-                            logger.warning("⚠️ Dissociation may not be complete, proceeding anyway...")
+                    # Wait longer for Azure to process the changes
+                    import asyncio
+                    await asyncio.sleep(5)
+                    
+                    # Multiple verification attempts with exponential backoff
+                    max_verification_attempts = 10
+                    for attempt in range(max_verification_attempts):
+                        logger.info(f"🔍 Verification attempt {attempt + 1}/{max_verification_attempts}")
+                        
+                        verify_response = await client.get(url, headers=headers)
+                        if verify_response.status_code == 200:
+                            verify_config = verify_response.json()
+                            ip_config_ref = verify_config.get("properties", {}).get("ipConfiguration")
+                            
+                            if not ip_config_ref:
+                                logger.info("✅ Dissociation verified successfully")
+                                break
+                            else:
+                                wait_time = min(2 ** attempt, 30)  # Exponential backoff, max 30 seconds
+                                logger.info(f"⏳ Still attached, waiting {wait_time}s before retry...")
+                                await asyncio.sleep(wait_time)
                         else:
-                            logger.info("✅ Dissociation verified successfully")
+                            logger.warning(f"⚠️ Verification request failed: {verify_response.status_code}")
+                            await asyncio.sleep(2)
+                    
+                    # Final verification
+                    final_verify = await client.get(url, headers=headers)
+                    if final_verify.status_code == 200:
+                        final_config = final_verify.json()
+                        if final_config.get("properties", {}).get("ipConfiguration"):
+                            return {
+                                "success": False, 
+                                "error": "PublicIPStillAttached",
+                                "message": "Failed to fully dissociate Public IP after multiple attempts. The resource may be in use by another service."
+                            }
+                        
                 else:
                     logger.info("🔗 Step 2: Public IP is not attached to any resources")
                 

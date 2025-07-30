@@ -64,6 +64,8 @@ body {
   color: #4a5568;
   line-height: 1.6;
   margin: 0;
+  text-align: left;
+  text-indent: 0;
 }
 
 /* Authentication Section */
