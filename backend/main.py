@@ -1040,11 +1040,17 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
             
             logger.info(f"🤖 Using automated upgrade agents for: {resource_id}")
             
-            # Initialize orchestrator with user token
-            orchestrator = AutomatedUpgradeOrchestrator(
-                access_token=user_info['token'],
-                tenant_id=user_info.get('tenant_id', 'unknown')
-            )
+            # Extract subscription ID from resource ID
+            subscription_id = user_info.get('decoded', {}).get('subscription', 'unknown')
+            if subscription_id == 'unknown' and resource_id:
+                # Extract subscription ID from resource ID format:
+                # /subscriptions/{subscription-id}/resourceGroups/...
+                resource_parts = resource_id.split('/')
+                if len(resource_parts) > 2 and resource_parts[1] == 'subscriptions':
+                    subscription_id = resource_parts[2]
+            
+            # Initialize orchestrator with subscription ID
+            orchestrator = AutomatedUpgradeOrchestrator(subscription_id=subscription_id)
             
             # Perform automated upgrade
             result = await orchestrator.upgrade_resource(resource_id)
