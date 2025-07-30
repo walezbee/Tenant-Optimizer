@@ -164,8 +164,23 @@ class PublicIPUpgradeAgent:
                         "no_change_required": True
                     }
                 
-                # Step 2: Update to Standard SKU
-                logger.info("🔄 Step 2: Updating SKU from Basic to Standard...")
+                # Step 2: Check if Public IP is attached to any resources
+                attached_resource = None
+                ip_configuration = current_config.get("properties", {}).get("ipConfiguration")
+                
+                if ip_configuration:
+                    logger.info("🔗 Step 2: Public IP is attached to a resource - dissociating...")
+                    attached_resource = ip_configuration.get("id")
+                    
+                    # Dissociate from the attached resource
+                    dissociation_result = await self._dissociate_public_ip_http(attached_resource, client, headers)
+                    if not dissociation_result["success"]:
+                        return dissociation_result
+                else:
+                    logger.info("🔗 Step 2: Public IP is not attached to any resources")
+                
+                # Step 3: Update to Standard SKU
+                logger.info("🔄 Step 3: Updating SKU from Basic to Standard...")
                 
                 # Create updated configuration
                 updated_config = current_config.copy()
@@ -179,11 +194,29 @@ class PublicIPUpgradeAgent:
                     updated_config["properties"] = {}
                 updated_config["properties"]["publicIPAllocationMethod"] = "Static"
                 
+                # Remove the ipConfiguration since we dissociated it
+                if "ipConfiguration" in updated_config.get("properties", {}):
+                    del updated_config["properties"]["ipConfiguration"]
+                
                 # Update the Public IP
                 update_response = await client.put(url, headers=headers, json=updated_config)
                 
                 if update_response.status_code in [200, 201, 202]:
-                    logger.info("✅ Public IP upgrade completed successfully!")
+                    logger.info("✅ Public IP SKU upgraded successfully!")
+                    
+                    # Step 4: Re-associate with the resource if it was attached
+                    if attached_resource:
+                        logger.info("🔗 Step 4: Re-associating Public IP with resource...")
+                        reassociation_result = await self._reassociate_public_ip_http(
+                            attached_resource, resource_id, client, headers
+                        )
+                        if not reassociation_result["success"]:
+                            return {
+                                "success": False,
+                                "error": "Upgrade succeeded but re-association failed",
+                                "message": f"Public IP upgraded but failed to re-associate: {reassociation_result['message']}",
+                                "manual_action_required": True
+                            }
                     
                     return {
                         "success": True,
@@ -193,13 +226,21 @@ class PublicIPUpgradeAgent:
                         "resource_id": resource_id,
                         "upgrade_method": "http_api",
                         "allocation_method": "Static",
+                        "attached_resource": attached_resource,
                         "details": {
                             "upgrade_completed": True,
                             "downtime_minimal": True,
-                            "configuration_preserved": True
+                            "configuration_preserved": True,
+                            "dissociation_performed": attached_resource is not None,
+                            "reassociation_performed": attached_resource is not None
                         }
                     }
                 else:
+                    # If upgrade failed and we dissociated, try to reassociate
+                    if attached_resource:
+                        logger.warning("⚠️ Upgrade failed, attempting to restore association...")
+                        await self._reassociate_public_ip_http(attached_resource, resource_id, client, headers)
+                    
                     return {
                         "success": False,
                         "error": f"Upgrade failed: {update_response.status_code}",
@@ -224,6 +265,102 @@ class PublicIPUpgradeAgent:
             "message": "Using HTTP API method instead of Azure SDK",
             "fallback_required": True
         }
+    
+    async def _dissociate_public_ip_http(self, ip_config_id: str, client, headers) -> Dict[str, Any]:
+        """Dissociate Public IP from network interface using HTTP API."""
+        try:
+            # Extract network interface ID from IP configuration ID
+            # Format: /subscriptions/.../networkInterfaces/nic-name/ipConfigurations/ipconfig-name
+            nic_id = "/".join(ip_config_id.split("/")[:-2])
+            
+            logger.info(f"🔌 Dissociating Public IP from NIC: {nic_id}")
+            
+            # Get current NIC configuration
+            nic_url = f"https://management.azure.com{nic_id}?api-version=2023-09-01"
+            nic_response = await client.get(nic_url, headers=headers)
+            
+            if nic_response.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"Failed to get NIC configuration: {nic_response.status_code}"
+                }
+            
+            nic_config = nic_response.json()
+            
+            # Find the IP configuration and remove the public IP reference
+            ip_configs = nic_config.get("properties", {}).get("ipConfigurations", [])
+            config_name = ip_config_id.split("/")[-1]
+            
+            for ip_config in ip_configs:
+                if ip_config.get("name") == config_name:
+                    if "publicIPAddress" in ip_config.get("properties", {}):
+                        del ip_config["properties"]["publicIPAddress"]
+                        logger.info(f"🔌 Removed Public IP reference from {config_name}")
+                    break
+            
+            # Update the NIC
+            update_response = await client.put(nic_url, headers=headers, json=nic_config)
+            
+            if update_response.status_code in [200, 201, 202]:
+                logger.info("✅ Successfully dissociated Public IP from NIC")
+                return {"success": True, "nic_config": nic_config}
+            else:
+                return {
+                    "success": False,
+                    "message": f"Failed to update NIC: {update_response.status_code} - {update_response.text}"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Dissociation failed: {str(e)}")
+            return {"success": False, "message": f"Dissociation error: {str(e)}"}
+    
+    async def _reassociate_public_ip_http(self, ip_config_id: str, public_ip_id: str, client, headers) -> Dict[str, Any]:
+        """Re-associate Public IP with network interface using HTTP API."""
+        try:
+            # Extract network interface ID from IP configuration ID
+            nic_id = "/".join(ip_config_id.split("/")[:-2])
+            
+            logger.info(f"🔗 Re-associating Public IP with NIC: {nic_id}")
+            
+            # Get current NIC configuration
+            nic_url = f"https://management.azure.com{nic_id}?api-version=2023-09-01"
+            nic_response = await client.get(nic_url, headers=headers)
+            
+            if nic_response.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"Failed to get NIC configuration: {nic_response.status_code}"
+                }
+            
+            nic_config = nic_response.json()
+            
+            # Find the IP configuration and add the public IP reference
+            ip_configs = nic_config.get("properties", {}).get("ipConfigurations", [])
+            config_name = ip_config_id.split("/")[-1]
+            
+            for ip_config in ip_configs:
+                if ip_config.get("name") == config_name:
+                    if "properties" not in ip_config:
+                        ip_config["properties"] = {}
+                    ip_config["properties"]["publicIPAddress"] = {"id": public_ip_id}
+                    logger.info(f"🔗 Added Public IP reference to {config_name}")
+                    break
+            
+            # Update the NIC
+            update_response = await client.put(nic_url, headers=headers, json=nic_config)
+            
+            if update_response.status_code in [200, 201, 202]:
+                logger.info("✅ Successfully re-associated Public IP with NIC")
+                return {"success": True}
+            else:
+                return {
+                    "success": False,
+                    "message": f"Failed to update NIC: {update_response.status_code} - {update_response.text}"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Re-association failed: {str(e)}")
+            return {"success": False, "message": f"Re-association error: {str(e)}"}
     
     def _parse_resource_id(self, resource_id: str) -> Optional[Dict[str, str]]:
         """Parse Azure resource ID into components."""

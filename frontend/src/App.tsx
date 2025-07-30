@@ -76,6 +76,15 @@ function App() {
     orphaned: boolean;
     deprecated: boolean;
   }>({ orphaned: false, deprecated: false });
+  
+  // New state for bulk operations and search
+  const [selectedResources, setSelectedResources] = useState<{
+    orphaned: Set<string>;
+    deprecated: Set<string>;
+  }>({ orphaned: new Set(), deprecated: new Set() });
+  
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [bulkOperationLoading, setBulkOperationLoading] = useState<boolean>(false);
 
   // Initialize MSAL on startup and handle redirects
   useEffect(() => {
@@ -410,7 +419,138 @@ function App() {
     }
   };
 
-  const deleteResource = async (resourceId: string) => {
+  // Search and filter functions
+  const filterResources = (resources: ScanResult[], searchTerm: string): ScanResult[] => {
+    if (!searchTerm.trim()) return resources;
+    
+    const term = searchTerm.toLowerCase();
+    return resources.filter(resource => 
+      resource.name.toLowerCase().includes(term) ||
+      resource.type.toLowerCase().includes(term) ||
+      resource.resourceGroup.toLowerCase().includes(term) ||
+      resource.location.toLowerCase().includes(term) ||
+      resource.analysis?.toLowerCase().includes(term) ||
+      resource.recommendation?.toLowerCase().includes(term)
+    );
+  };
+
+  // Bulk selection functions
+  const toggleResourceSelection = (resourceId: string, type: 'orphaned' | 'deprecated') => {
+    setSelectedResources(prev => {
+      const newSet = new Set(prev[type]);
+      if (newSet.has(resourceId)) {
+        newSet.delete(resourceId);
+      } else {
+        newSet.add(resourceId);
+      }
+      return { ...prev, [type]: newSet };
+    });
+  };
+
+  const selectAllResources = (type: 'orphaned' | 'deprecated', resources: ScanResult[]) => {
+    const filteredResources = filterResources(resources, searchTerm);
+    setSelectedResources(prev => ({
+      ...prev,
+      [type]: new Set(filteredResources.map(r => r.id))
+    }));
+  };
+
+  const deselectAllResources = (type: 'orphaned' | 'deprecated') => {
+    setSelectedResources(prev => ({
+      ...prev,
+      [type]: new Set()
+    }));
+  };
+
+  // Bulk operations
+  const bulkDeleteOrphanedResources = async () => {
+    const selectedIds = Array.from(selectedResources.orphaned);
+    if (selectedIds.length === 0) {
+      alert('Please select resources to delete');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete ${selectedIds.length} orphaned resources? This action cannot be undone.`)) {
+      return;
+    }
+
+    setBulkOperationLoading(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    try {
+      for (const resourceId of selectedIds) {
+        try {
+          await deleteResource(resourceId, false); // Don't show individual alerts
+          successCount++;
+        } catch (error) {
+          errorCount++;
+          console.error(`Failed to delete ${resourceId}:`, error);
+        }
+      }
+
+      alert(`Bulk deletion completed. ${successCount} resources deleted successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}.`);
+      
+      // Clear selections
+      setSelectedResources(prev => ({ ...prev, orphaned: new Set() }));
+      
+      // Refresh the orphaned resources
+      if (selectedSubscriptions.length > 0) {
+        scanOrphanedResources();
+      }
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      alert('Bulk deletion failed. Please try again.');
+    } finally {
+      setBulkOperationLoading(false);
+    }
+  };
+
+  const bulkUpgradeDeprecatedResources = async () => {
+    const selectedIds = Array.from(selectedResources.deprecated);
+    if (selectedIds.length === 0) {
+      alert('Please select resources to upgrade');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to upgrade ${selectedIds.length} deprecated resources?`)) {
+      return;
+    }
+
+    setBulkOperationLoading(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    try {
+      for (const resourceId of selectedIds) {
+        try {
+          await upgradeResource(resourceId, false); // Don't show individual alerts
+          successCount++;
+        } catch (error) {
+          errorCount++;
+          console.error(`Failed to upgrade ${resourceId}:`, error);
+        }
+      }
+
+      alert(`Bulk upgrade completed. ${successCount} resources upgraded successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}.`);
+      
+      // Clear selections
+      setSelectedResources(prev => ({ ...prev, deprecated: new Set() }));
+      
+      // Refresh the deprecated resources
+      if (selectedSubscriptions.length > 0) {
+        scanDeprecatedResources();
+      }
+    } catch (error) {
+      console.error('Bulk upgrade error:', error);
+      alert('Bulk upgrade failed. Please try again.');
+    } finally {
+      setBulkOperationLoading(false);
+    }
+  };
+
+  // Enhanced delete and upgrade functions with optional alert parameter
+  const deleteResource = async (resourceId: string, showAlert: boolean = true) => {
     if (!armToken) {
       setError("Azure ARM token is required for resource operations");
       return;
@@ -441,7 +581,9 @@ function App() {
         orphaned: prev.orphaned?.filter(r => r.id !== resourceId) || []
       }));
 
-      alert(`Resource deletion initiated successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
+      if (showAlert) {
+        alert(`Resource deletion initiated successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
+      }
     } catch (e: any) {
       setError(`Error deleting resource: ${e.message || e.toString()}`);
     } finally {
@@ -449,13 +591,13 @@ function App() {
     }
   };
 
-  const upgradeResource = async (resourceId: string, upgradeType: string = "sku-upgrade") => {
+  const upgradeResource = async (resourceId: string, showAlert: boolean = true) => {
     if (!armToken) {
       setError("Azure ARM token is required for resource operations");
       return;
     }
 
-    if (!confirm(`Are you sure you want to upgrade this resource?\n\nResource: ${resourceId}\nUpgrade Type: ${upgradeType}\n\nThis will use automated agents to safely upgrade the resource.`)) {
+    if (showAlert && !confirm(`Are you sure you want to upgrade this resource?\n\nResource: ${resourceId}\n\nThis will use automated agents to safely upgrade the resource.`)) {
       return;
     }
 
@@ -465,7 +607,7 @@ function App() {
     try {
       const resp = await fetchWithAuth("/api/resources/upgrade", armToken, {
         method: "POST",
-        body: JSON.stringify({ resourceId, upgradeType }),
+        body: JSON.stringify({ resourceId }),
       });
       
       const data = await resp.json();
@@ -496,7 +638,9 @@ function App() {
           });
         }
         
-        alert(message);
+        if (showAlert) {
+          alert(message);
+        }
         
         // Refresh scan results to show updated state
         await scanDeprecatedResources();
@@ -505,39 +649,43 @@ function App() {
 
       // Handle skipped upgrades (already optimal)
       if (data.success && data.skipped) {
-        alert(`✅ ${data.message}\n\nResource: ${resourceId}\n\nNo upgrade was needed - the resource is already optimally configured.`);
+        if (showAlert) {
+          alert(`✅ ${data.message}\n\nResource: ${resourceId}\n\nNo upgrade was needed - the resource is already optimally configured.`);
+        }
         return;
       }
 
       // Handle manual upgrade requirements (fallback)
       if (data.manualUpgradeRequired) {
-        let message = `🔧 Manual upgrade required!\n\nResource: ${resourceId}\n\n${data.message}`;
-        
-        if (data.reason) {
-          message += `\n\n📋 Reason: ${data.reason}`;
+        if (showAlert) {
+          let message = `🔧 Manual upgrade required!\n\nResource: ${resourceId}\n\n${data.message}`;
+          
+          if (data.reason) {
+            message += `\n\n📋 Reason: ${data.reason}`;
+          }
+          
+          if (data.upgradeSteps || data.detailedSteps) {
+            const steps = data.detailedSteps || data.upgradeSteps;
+            message += "\n\n📝 Upgrade Steps:";
+            steps.forEach((step: string, index: number) => {
+              message += `\n${index + 1}. ${step}`;
+            });
+          }
+          
+          if (data.alternativeOption) {
+            message += `\n\n💡 Alternative: ${data.alternativeOption}`;
+          }
+          
+          if (data.attachedTo) {
+            message += `\n\n🔗 Currently attached to: ${data.attachedTo}`;
+          }
+          
+          if (data.errorContext) {
+            message += `\n\n⚠️ Context: ${data.errorContext}`;
+          }
+          
+          alert(message);
         }
-        
-        if (data.upgradeSteps || data.detailedSteps) {
-          const steps = data.detailedSteps || data.upgradeSteps;
-          message += "\n\n📝 Upgrade Steps:";
-          steps.forEach((step: string, index: number) => {
-            message += `\n${index + 1}. ${step}`;
-          });
-        }
-        
-        if (data.alternativeOption) {
-          message += `\n\n💡 Alternative: ${data.alternativeOption}`;
-        }
-        
-        if (data.attachedTo) {
-          message += `\n\n🔗 Currently attached to: ${data.attachedTo}`;
-        }
-        
-        if (data.errorContext) {
-          message += `\n\n⚠️ Context: ${data.errorContext}`;
-        }
-        
-        alert(message);
         
         // Offer to open Azure Portal
         if (data.azurePortalUrl) {
@@ -711,12 +859,79 @@ function App() {
               <div className="results-section">
                 <h2 className="section-title">📊 Scan Results</h2>
                 
+                {/* Search Bar */}
+                <div className="search-section">
+                  <input
+                    type="text"
+                    placeholder="🔍 Search resources by name, type, location, or description..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="search-input"
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="clear-search-btn"
+                      title="Clear search"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                
                 {scanResults.orphaned && scanResults.orphaned.length > 0 && (
                   <div className="result-category">
-                    <h3 className="result-title">🗑️ Orphaned Resources ({scanResults.orphaned.length})</h3>
+                    <div className="category-header">
+                      <h3 className="result-title">
+                        🗑️ Orphaned Resources ({filterResources(scanResults.orphaned, searchTerm).length}
+                        {searchTerm && scanResults.orphaned.length !== filterResources(scanResults.orphaned, searchTerm).length && 
+                          ` of ${scanResults.orphaned.length}`})
+                      </h3>
+                      
+                      {/* Bulk Operations for Orphaned Resources */}
+                      {filterResources(scanResults.orphaned, searchTerm).length > 0 && (
+                        <div className="bulk-operations">
+                          <div className="selection-controls">
+                            <button
+                              onClick={() => selectAllResources('orphaned', scanResults.orphaned)}
+                              className="select-all-btn"
+                              disabled={bulkOperationLoading}
+                            >
+                              Select All Visible
+                            </button>
+                            <button
+                              onClick={() => deselectAllResources('orphaned')}
+                              className="deselect-all-btn"
+                              disabled={bulkOperationLoading}
+                            >
+                              Deselect All
+                            </button>
+                            <span className="selection-count">
+                              {selectedResources.orphaned.size} selected
+                            </span>
+                          </div>
+                          <button
+                            onClick={bulkDeleteOrphanedResources}
+                            disabled={selectedResources.orphaned.size === 0 || bulkOperationLoading}
+                            className="bulk-action-btn bulk-delete-btn"
+                          >
+                            {bulkOperationLoading ? '⏳ Deleting...' : `🗑️ Delete Selected (${selectedResources.orphaned.size})`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    
                     <div className="result-list">
-                      {scanResults.orphaned.map((resource, index) => (
+                      {filterResources(scanResults.orphaned, searchTerm).map((resource, index) => (
                         <div key={index} className="result-item orphaned-item">
+                          <div className="resource-selection">
+                            <input
+                              type="checkbox"
+                              checked={selectedResources.orphaned.has(resource.id)}
+                              onChange={() => toggleResourceSelection(resource.id, 'orphaned')}
+                              className="resource-checkbox"
+                            />
+                          </div>
                           <div className="resource-info">
                             <div className="resource-name">{resource.name}</div>
                             <div className="resource-type">{resource.type}</div>
@@ -741,7 +956,7 @@ function App() {
                                   key={actionIndex}
                                   className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
                                   onClick={() => action.type === 'delete' ? deleteResource(resource.id) : console.log('Action not implemented')}
-                                  disabled={loading}
+                                  disabled={loading || bulkOperationLoading}
                                   title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedSavings ? ', Saves: ' + action.estimatedSavings : ''})`}
                                 >
                                   {action.type === 'delete' ? '🗑️ Delete' : '⚡ ' + action.type}
@@ -754,16 +969,69 @@ function App() {
                           )}
                         </div>
                       ))}
+                      
+                      {filterResources(scanResults.orphaned, searchTerm).length === 0 && searchTerm && (
+                        <div className="no-results">
+                          No orphaned resources match your search "{searchTerm}"
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {scanResults.deprecated && scanResults.deprecated.length > 0 && (
                   <div className="result-category">
-                    <h3 className="result-title">⚠️ Deprecated Resources ({scanResults.deprecated.length})</h3>
+                    <div className="category-header">
+                      <h3 className="result-title">
+                        ⚠️ Deprecated Resources ({filterResources(scanResults.deprecated, searchTerm).length}
+                        {searchTerm && scanResults.deprecated.length !== filterResources(scanResults.deprecated, searchTerm).length && 
+                          ` of ${scanResults.deprecated.length}`})
+                      </h3>
+                      
+                      {/* Bulk Operations for Deprecated Resources */}
+                      {filterResources(scanResults.deprecated, searchTerm).length > 0 && (
+                        <div className="bulk-operations">
+                          <div className="selection-controls">
+                            <button
+                              onClick={() => selectAllResources('deprecated', scanResults.deprecated)}
+                              className="select-all-btn"
+                              disabled={bulkOperationLoading}
+                            >
+                              Select All Visible
+                            </button>
+                            <button
+                              onClick={() => deselectAllResources('deprecated')}
+                              className="deselect-all-btn"
+                              disabled={bulkOperationLoading}
+                            >
+                              Deselect All
+                            </button>
+                            <span className="selection-count">
+                              {selectedResources.deprecated.size} selected
+                            </span>
+                          </div>
+                          <button
+                            onClick={bulkUpgradeDeprecatedResources}
+                            disabled={selectedResources.deprecated.size === 0 || bulkOperationLoading}
+                            className="bulk-action-btn bulk-upgrade-btn"
+                          >
+                            {bulkOperationLoading ? '⏳ Upgrading...' : `⬆️ Upgrade Selected (${selectedResources.deprecated.size})`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    
                     <div className="result-list">
-                      {scanResults.deprecated.map((resource, index) => (
+                      {filterResources(scanResults.deprecated, searchTerm).map((resource, index) => (
                         <div key={index} className="result-item deprecated-item">
+                          <div className="resource-selection">
+                            <input
+                              type="checkbox"
+                              checked={selectedResources.deprecated.has(resource.id)}
+                              onChange={() => toggleResourceSelection(resource.id, 'deprecated')}
+                              className="resource-checkbox"
+                            />
+                          </div>
                           <div className="resource-info">
                             <div className="resource-name">{resource.name}</div>
                             <div className="resource-type">{resource.type}</div>
@@ -793,7 +1061,7 @@ function App() {
                                   key={actionIndex}
                                   className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
                                   onClick={() => action.type === 'upgrade' ? upgradeResource(resource.id) : console.log('Action not implemented')}
-                                  disabled={loading}
+                                  disabled={loading || bulkOperationLoading}
                                   title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedTimeToComplete ? ', Time: ' + action.estimatedTimeToComplete : ''})`}
                                 >
                                   {action.type === 'upgrade' ? '⬆️ Upgrade' : '⚡ ' + action.type}
@@ -806,6 +1074,12 @@ function App() {
                           )}
                         </div>
                       ))}
+                      
+                      {filterResources(scanResults.deprecated, searchTerm).length === 0 && searchTerm && (
+                        <div className="no-results">
+                          No deprecated resources match your search "{searchTerm}"
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
