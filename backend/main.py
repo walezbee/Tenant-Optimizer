@@ -671,6 +671,14 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
         
         # Try to import and use automated upgrade agents
         try:
+            import sys
+            import os
+            
+            # Add agents directory to path if not already there
+            agents_path = os.path.join(os.path.dirname(__file__), 'agents')
+            if agents_path not in sys.path:
+                sys.path.insert(0, agents_path)
+            
             from agents.upgrade_orchestrator import AutomatedUpgradeOrchestrator
             
             logger.info(f"🤖 Using automated upgrade agents for: {resource_id}")
