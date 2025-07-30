@@ -709,10 +709,10 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # MUCH BROADER query for deprecated resources - remove restrictive conditions
+        # Fixed query for deprecated resources - removed problematic contains() functions
         query = """
         Resources
-        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts", "microsoft.compute/virtualmachines", "microsoft.sql/servers")
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
         | extend skuName = case(
             isnotnull(properties.sku.name), tostring(properties.sku.name),
             isnotnull(properties.sku), tostring(properties.sku),
@@ -729,14 +729,6 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
             isnotnull(properties.accessTier), tostring(properties.accessTier),
             ""
         )
-        | extend performanceTier = case(
-            isnotnull(properties.performanceTier), tostring(properties.performanceTier),
-            ""
-        )
-        | extend vmSize = case(
-            isnotnull(properties.hardwareProfile.vmSize), tostring(properties.hardwareProfile.vmSize),
-            ""
-        )
         | where skuName =~ "Basic" 
            or skuTier =~ "Basic"
            or skuName contains "Basic"
@@ -744,14 +736,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
            or skuName =~ "Standard_LRS"
            or skuName =~ "Standard_GRS"
            or accessTier =~ "Archive"
-           or performanceTier =~ "P4"
-           or performanceTier =~ "P6"
-           or vmSize contains "A1"
-           or vmSize contains "A2"
-           or vmSize contains "Standard_A"
-           or contains(tostring(properties), "Basic")
-           or contains(tostring(sku), "Basic")
-        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, performanceTier, vmSize, properties, sku
+        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, properties
         | limit 100
         """
         
@@ -845,8 +830,6 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     sku_name = resource.get("skuName", "")
                     sku_tier = resource.get("skuTier", "")
                     access_tier = resource.get("accessTier", "")
-                    performance_tier = resource.get("performanceTier", "")
-                    vm_size = resource.get("vmSize", "")
                     
                     # Determine upgrade type and description based on resource type and configuration
                     if "publicipaddresses" in resource_type:
@@ -871,20 +854,6 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                             description = f"Storage account with optimization opportunity - SKU: {sku_name}"
                             recommendation = "Review storage account configuration for optimization opportunities"
                             
-                    elif "virtualmachines" in resource_type:
-                        upgrade_type = "virtual_machine"
-                        if "A1" in vm_size or "A2" in vm_size or "Standard_A" in vm_size:
-                            description = f"VM using older generation size - Size: {vm_size}"
-                            recommendation = "Consider upgrading to newer generation VM sizes for better performance and cost efficiency"
-                        else:
-                            description = f"VM with potential optimization - Size: {vm_size}"
-                            recommendation = "Review VM size for optimization opportunities"
-                            
-                    elif "sql/servers" in resource_type:
-                        upgrade_type = "sql_server"
-                        description = f"SQL Server with potential optimization - Performance: {performance_tier}"
-                        recommendation = "Review SQL Server configuration and consider performance tier optimization"
-                        
                     else:
                         upgrade_type = "general"
                         description = f"Resource with deprecated or suboptimal configuration - SKU: {sku_name}"
