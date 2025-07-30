@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Resource Graph Diagnostic Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; }
+        .error { background-color: #f8d7da; }
+        button { padding: 10px 20px; margin: 5px; }
+        pre { background-color: #f8f9fa; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Resource Graph API Diagnostic Test</h1>
+    
+    <div>
+        <p><strong>Instructions:</strong></p>
+        <ol>
+            <li>First, go to the main app and login: <a href="https://tenant-optimizer-web.azurewebsites.net/" target="_blank">Main App</a></li>
+            <li>After logging in, come back here and run these tests</li>
+            <li>These tests will help diagnose why no resources are showing</li>
+        </ol>
+    </div>
+    
+    <div>
+        <button onclick="testResourceGraph()">Test Resource Graph API</button>
+        <button onclick="testDiskQuery()">Test Disk Query</button>
+        <button onclick="testOrphanedScan()">Test Orphaned Scan</button>
+        <button onclick="testDeprecatedScan()">Test Deprecated Scan</button>
+    </div>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE = 'https://tenant-optimizer-web.azurewebsites.net';
+        
+        function getAuthToken() {
+            // Try to get token from localStorage (set by main app)
+            return localStorage.getItem('authToken') || localStorage.getItem('accessToken');
+        }
+        
+        async function makeAuthenticatedRequest(endpoint) {
+            const token = getAuthToken();
+            if (!token) {
+                return { error: 'No authentication token found. Please login to the main app first.' };
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                return { status: response.status, data: result };
+                
+            } catch (error) {
+                return { error: error.message };
+            }
+        }
+        
+        async function makePostRequest(endpoint, payload) {
+            const token = getAuthToken();
+            if (!token) {
+                return { error: 'No authentication token found. Please login to the main app first.' };
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                return { status: response.status, data: result };
+                
+            } catch (error) {
+                return { error: error.message };
+            }
+        }
+        
+        function displayResult(title, result) {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `test-result ${result.error ? 'error' : 'success'}`;
+            
+            resultDiv.innerHTML = `
+                <h3>${title}</h3>
+                <pre>${JSON.stringify(result, null, 2)}</pre>
+            `;
+            
+            resultsDiv.appendChild(resultDiv);
+        }
+        
+        async function testResourceGraph() {
+            const result = await makeAuthenticatedRequest('/api/test/resource-graph');
+            displayResult('Resource Graph API Test', result);
+        }
+        
+        async function testDiskQuery() {
+            const result = await makeAuthenticatedRequest('/api/test/disk-query');
+            displayResult('Disk Query Test', result);
+        }
+        
+        async function testOrphanedScan() {
+            const result = await makePostRequest('/api/scan/orphaned', { subscriptions: [] });
+            displayResult('Orphaned Resources Scan Test', result);
+        }
+        
+        async function testDeprecatedScan() {
+            const result = await makePostRequest('/api/scan/deprecated', { subscriptions: [] });
+            displayResult('Deprecated Resources Scan Test', result);
+        }
+    </script>
+</body>
+</html>
