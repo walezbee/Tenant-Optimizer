@@ -173,7 +173,7 @@ async def test_resource_graph(user_info: Dict[str, Any] = Depends(verify_azure_t
         | limit 5
         """
         
-        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
@@ -250,7 +250,7 @@ async def test_disk_query(user_info: Dict[str, Any] = Depends(verify_azure_token
         | limit 10
         """
         
-        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
@@ -386,7 +386,7 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
         | limit 100
         """
         
-        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
@@ -514,7 +514,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         | limit 100
         """
         
-        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
@@ -662,14 +662,43 @@ async def delete_resource(payload: dict, user_info: Dict[str, Any] = Depends(ver
 
 @app.post("/api/resources/upgrade")
 async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
-    """Provide manual upgrade guidance for Azure resources."""
+    """Upgrade Azure resources using automated agents or provide manual guidance."""
     try:
         resource_id = payload.get("resourceId", "")
         
         if not resource_id:
             raise HTTPException(status_code=400, detail="Resource ID is required")
         
-        # Determine resource type from ID
+        # Try to import and use automated upgrade agents
+        try:
+            from agents.upgrade_orchestrator import AutomatedUpgradeOrchestrator
+            
+            logger.info(f"🤖 Using automated upgrade agents for: {resource_id}")
+            
+            # Initialize orchestrator with user token
+            orchestrator = AutomatedUpgradeOrchestrator(
+                access_token=user_info['token'],
+                tenant_id=user_info.get('tenant_id', 'unknown')
+            )
+            
+            # Perform automated upgrade
+            result = await orchestrator.upgrade_resource(resource_id)
+            
+            return {
+                "success": result.get("success", False),
+                "method": "automated_agents",
+                "message": result.get("message", "Automated upgrade completed"),
+                "details": result,
+                "timestamp": datetime.now().isoformat(),
+                "resourceId": resource_id
+            }
+            
+        except ImportError as e:
+            logger.info(f"📋 Automated agents not available, providing manual guidance: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Automated upgrade failed, falling back to manual guidance: {e}")
+        
+        # Fallback to manual guidance
         resource_name = resource_id.split('/')[-1] if resource_id else "your-resource"
         
         if "publicipaddresses" in resource_id.lower():
@@ -714,6 +743,54 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
                     "⚠️  Standard SKU has different pricing"
                 ]
             }
+        elif "loadbalancers" in resource_id.lower():
+            instructions = {
+                "title": "Load Balancer Upgrade (Basic to Standard SKU)",
+                "estimated_time": "10-20 minutes",
+                "resource_name": resource_name,
+                "steps": [
+                    {
+                        "step": 1,
+                        "action": "Navigate to Azure Portal",
+                        "details": "Open Azure Portal and search for 'Load balancers'"
+                    },
+                    {
+                        "step": 2,
+                        "action": "Locate your Load Balancer",
+                        "details": f"Find and click on: {resource_name}"
+                    },
+                    {
+                        "step": 3,
+                        "action": "Review configuration", 
+                        "details": "Note frontend IPs, backend pools, and health probes"
+                    },
+                    {
+                        "step": 4,
+                        "action": "Create new Standard LB",
+                        "details": "Basic to Standard upgrade requires creating a new load balancer"
+                    },
+                    {
+                        "step": 5,
+                        "action": "Migrate configuration",
+                        "details": "Recreate rules, probes, and backend pools on new Standard LB"
+                    },
+                    {
+                        "step": 6,
+                        "action": "Update DNS and associations",
+                        "details": "Point applications to new Standard load balancer"
+                    },
+                    {
+                        "step": 7,
+                        "action": "Delete old Basic LB",
+                        "details": "After confirming everything works, delete the Basic LB"
+                    }
+                ],
+                "warnings": [
+                    "⚠️  This requires creating a new load balancer",
+                    "⚠️  Significant downtime during migration",
+                    "⚠️  Higher cost for Standard SKU"
+                ]
+            }
         else:
             instructions = {
                 "title": "Manual Resource Upgrade",
@@ -739,7 +816,7 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
         return {
             "success": True,
             "method": "manual_guidance",
-            "message": "Providing manual upgrade guidance",
+            "message": "Providing manual upgrade guidance (automated agents not available)",
             "instructions": instructions,
             "timestamp": datetime.now().isoformat(),
             "resourceId": resource_id,
