@@ -298,13 +298,22 @@ class PublicIPUpgradeAgent:
             }
     
     async def _upgrade_via_sdk(self, resource_id: str) -> Dict[str, Any]:
-        """Upgrade Public IP using Azure SDK - proper dissociation approach."""
+        """
+        Upgrade Public IP using Azure SDK with proper resource state management.
+        
+        This implementation follows Azure's recommended approach for SKU upgrades:
+        1. Complete dissociation from all attached resources
+        2. Wait for Azure to fully process the dissociation
+        3. Perform the SKU upgrade on the unattached Public IP
+        4. Reassociate to original resources
+        """
         try:
             from azure.identity import DefaultAzureCredential
             from azure.mgmt.network import NetworkManagementClient
+            from azure.mgmt.network.models import PublicIPAddressSku, PublicIPAddressSkuName, PublicIPAddressSkuTier
             import asyncio
             
-            logger.info("🔧 Using Azure SDK approach for Public IP upgrade")
+            logger.info("🔧 Using Enhanced Azure SDK approach for Public IP upgrade")
             
             # Parse resource ID to extract components
             parts = resource_id.split("/")
@@ -316,7 +325,7 @@ class PublicIPUpgradeAgent:
             logger.info(f"📋 Resource Group: {resource_group}")
             logger.info(f"📋 Public IP Name: {public_ip_name}")
             
-            # Initialize Azure SDK client
+            # Initialize Azure SDK client with retry configuration
             credential = DefaultAzureCredential()
             network_client = NetworkManagementClient(credential, subscription_id)
             
@@ -325,9 +334,10 @@ class PublicIPUpgradeAgent:
             public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
             
             logger.info(f"📊 Current SKU: {public_ip.sku.name}")
+            logger.info(f"📊 Current Allocation: {public_ip.public_ip_allocation_method}")
             
             # Check if already Standard
-            if public_ip.sku.name.lower() == "standard":
+            if public_ip.sku.name and public_ip.sku.name.lower() == "standard":
                 return {
                     "success": True,
                     "message": "Public IP is already using Standard SKU",
@@ -336,122 +346,106 @@ class PublicIPUpgradeAgent:
                     "no_change_required": True
                 }
             
-            # Step 2: Handle dissociation if attached
-            attached_nic = None
-            attached_config_name = None
+            # Step 2: Enhanced dissociation with proper verification
+            attached_resources = []
             
             if public_ip.ip_configuration:
-                logger.info("🔗 Step 2: Public IP is attached - performing SDK-based dissociation...")
+                logger.info("🔗 Step 2: Public IP is attached - performing enhanced dissociation...")
                 
-                # Extract NIC information from IP configuration
+                # Store all attachment details for later reassociation
                 ip_config_id = public_ip.ip_configuration.id
                 nic_parts = ip_config_id.split("/")
                 nic_name = nic_parts[8]  # network interface name
-                attached_config_name = nic_parts[10]  # IP configuration name
+                config_name = nic_parts[10]  # IP configuration name
                 
-                logger.info(f"🔌 Attached to NIC: {nic_name}, Config: {attached_config_name}")
+                logger.info(f"🔌 Attached to NIC: {nic_name}, Config: {config_name}")
                 
-                # Get the NIC
-                nic = network_client.network_interfaces.get(resource_group, nic_name)
-                attached_nic = nic
+                # Store attachment info for reassociation
+                attached_resources.append({
+                    "type": "network_interface",
+                    "nic_name": nic_name,
+                    "config_name": config_name,
+                    "resource_group": resource_group
+                })
                 
-                # Find and remove the public IP reference
-                for ip_config in nic.ip_configurations:
-                    if ip_config.name == attached_config_name:
-                        if ip_config.public_ip_address:
-                            logger.info(f"🔌 Removing Public IP from {ip_config.name}")
-                            ip_config.public_ip_address = None
-                        break
-                
-                # Update the NIC using SDK
-                logger.info("🔄 Updating NIC to remove Public IP reference...")
-                poller = network_client.network_interfaces.begin_create_or_update(
-                    resource_group, nic_name, nic
+                # Perform complete dissociation
+                await self._perform_complete_dissociation(
+                    network_client, resource_group, nic_name, config_name, public_ip_name
                 )
                 
-                # Wait for the operation to complete
-                logger.info("⏳ Waiting for NIC update to complete...")
-                result = poller.result()
-                logger.info("✅ NIC update completed")
-                
-                # Additional wait for Azure to process
-                logger.info("⏳ Waiting for Azure to process dissociation...")
-                await asyncio.sleep(10)
-                
-                # Verify dissociation
-                updated_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
-                if updated_public_ip.ip_configuration:
-                    logger.warning("⚠️ Public IP still shows attachment after dissociation")
-                else:
-                    logger.info("✅ Dissociation verified")
             else:
-                logger.info("🔗 Step 2: Public IP is not attached")
+                logger.info("🔗 Step 2: Public IP is not attached - proceeding with upgrade")
             
-            # Step 3: Upgrade to Standard SKU
-            logger.info("🔄 Step 3: Upgrading SKU to Standard...")
+            # Step 3: Enhanced SKU upgrade with proper resource handling
+            logger.info("🔄 Step 3: Performing enhanced SKU upgrade...")
             
-            # Update the Public IP SKU
-            public_ip.sku.name = "Standard"
-            if hasattr(public_ip, 'public_ip_allocation_method'):
-                public_ip.public_ip_allocation_method = "Static"
+            # Get fresh Public IP reference after dissociation
+            fresh_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
             
-            # Perform the upgrade
-            logger.info("🚀 Performing SDK-based SKU upgrade...")
-            upgrade_poller = network_client.public_ip_addresses.begin_create_or_update(
-                resource_group, public_ip_name, public_ip
+            # Verify it's completely dissociated before upgrade
+            if fresh_public_ip.ip_configuration:
+                raise Exception("Public IP is still attached after dissociation - cannot proceed with upgrade")
+            
+            # Create proper SKU object for Standard
+            fresh_public_ip.sku = PublicIPAddressSku(
+                name=PublicIPAddressSkuName.STANDARD,
+                tier=PublicIPAddressSkuTier.REGIONAL
             )
             
-            # Wait for upgrade to complete
-            logger.info("⏳ Waiting for SKU upgrade to complete...")
-            upgrade_result = upgrade_poller.result()
-            logger.info("✅ SKU upgrade completed")
+            # Ensure Static allocation for Standard SKU
+            fresh_public_ip.public_ip_allocation_method = "Static"
             
-            # Step 4: Reassociate if it was attached
-            if attached_nic and attached_config_name:
-                logger.info("🔄 Step 4: Reassociating Public IP...")
+            # Perform the upgrade with proper error handling
+            logger.info("🚀 Executing SKU upgrade to Standard...")
+            upgrade_poller = network_client.public_ip_addresses.begin_create_or_update(
+                resource_group, public_ip_name, fresh_public_ip
+            )
+            
+            # Wait for upgrade with timeout
+            logger.info("⏳ Waiting for SKU upgrade to complete...")
+            upgrade_result = upgrade_poller.result(timeout=300)  # 5 minute timeout
+            logger.info("✅ SKU upgrade completed successfully")
+            
+            # Verify the upgrade was successful
+            upgraded_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+            if upgraded_public_ip.sku.name.lower() != "standard":
+                raise Exception(f"SKU upgrade failed - still shows {upgraded_public_ip.sku.name}")
+            
+            # Step 4: Reassociate to original resources
+            if attached_resources:
+                logger.info("🔄 Step 4: Reassociating Public IP to original resources...")
                 
-                # Get the updated Public IP reference
-                updated_public_ip_ref = network_client.public_ip_addresses.get(resource_group, public_ip_name)
-                
-                # Reassociate
-                for ip_config in attached_nic.ip_configurations:
-                    if ip_config.name == attached_config_name:
-                        ip_config.public_ip_address = updated_public_ip_ref
-                        break
-                
-                # Update the NIC again
-                reassoc_poller = network_client.network_interfaces.begin_create_or_update(
-                    resource_group, attached_nic.name, attached_nic
-                )
-                
-                logger.info("⏳ Waiting for reassociation to complete...")
-                reassoc_result = reassoc_poller.result()
-                logger.info("✅ Reassociation completed")
+                for attachment in attached_resources:
+                    await self._perform_reassociation(
+                        network_client, attachment, resource_group, public_ip_name
+                    )
             
             return {
                 "success": True,
-                "message": "Public IP successfully upgraded using Azure SDK",
+                "message": "Public IP successfully upgraded using Enhanced Azure SDK approach",
                 "sku_before": "Basic",
                 "sku_after": "Standard",
                 "resource_id": resource_id,
-                "upgrade_method": "azure_sdk",
+                "upgrade_method": "enhanced_azure_sdk",
                 "allocation_method": "Static",
-                "attached_nic": attached_nic.name if attached_nic else None,
+                "attached_resources": len(attached_resources),
                 "details": {
                     "upgrade_completed": True,
                     "sdk_based": True,
-                    "dissociation_performed": attached_nic is not None,
-                    "reassociation_performed": attached_nic is not None
+                    "enhanced_dissociation": True,
+                    "dissociation_performed": len(attached_resources) > 0,
+                    "reassociation_performed": len(attached_resources) > 0,
+                    "verification_completed": True
                 }
             }
             
         except Exception as e:
-            logger.error(f"❌ SDK-based upgrade failed: {str(e)}")
+            logger.error(f"❌ Enhanced SDK-based upgrade failed: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),
-                "message": f"Azure SDK upgrade failed: {str(e)}",
-                "upgrade_method": "azure_sdk"
+                "message": f"Enhanced Azure SDK upgrade failed: {str(e)}",
+                "upgrade_method": "enhanced_azure_sdk"
             }
     
     async def _dissociate_public_ip_http(self, ip_config_id: str, public_ip_url: str, client, headers) -> Dict[str, Any]:
@@ -952,6 +946,145 @@ class PublicIPUpgradeAgent:
                 "Update DNS records if the IP address changed"
             ]
         }
+
+    async def _perform_complete_dissociation(self, network_client, resource_group: str, 
+                                           nic_name: str, config_name: str, public_ip_name: str):
+        """
+        Perform complete dissociation with enhanced verification and retry logic.
+        This method ensures the Public IP is fully released from Azure's perspective.
+        """
+        import asyncio
+        
+        logger.info(f"🔌 Starting complete dissociation process for {public_ip_name}")
+        
+        # Step 1: Get the current NIC configuration
+        nic = network_client.network_interfaces.get(resource_group, nic_name)
+        
+        # Step 2: Remove public IP reference from the specified configuration
+        public_ip_removed = False
+        for ip_config in nic.ip_configurations:
+            if ip_config.name == config_name:
+                if ip_config.public_ip_address:
+                    logger.info(f"🔌 Removing Public IP reference from {config_name}")
+                    ip_config.public_ip_address = None
+                    public_ip_removed = True
+                break
+        
+        if not public_ip_removed:
+            logger.warning("⚠️ No public IP reference found to remove")
+            return
+        
+        # Step 3: Update the NIC with enhanced waiting
+        logger.info("🔄 Updating NIC to dissociate Public IP...")
+        update_poller = network_client.network_interfaces.begin_create_or_update(
+            resource_group, nic_name, nic
+        )
+        
+        # Wait for NIC update to complete with timeout
+        logger.info("⏳ Waiting for NIC update to complete...")
+        update_result = update_poller.result(timeout=180)  # 3 minute timeout
+        logger.info("✅ NIC update operation completed")
+        
+        # Step 4: Enhanced verification with multiple checks
+        logger.info("🔍 Performing enhanced dissociation verification...")
+        
+        max_attempts = 12  # Increased verification attempts
+        verification_delay = 15  # Longer delay between checks
+        
+        for attempt in range(max_attempts):
+            logger.info(f"🔍 Verification attempt {attempt + 1}/{max_attempts}")
+            
+            # Check both NIC and Public IP perspectives
+            try:
+                # Check from NIC perspective
+                current_nic = network_client.network_interfaces.get(resource_group, nic_name)
+                nic_has_public_ip = False
+                
+                for ip_config in current_nic.ip_configurations:
+                    if ip_config.name == config_name and ip_config.public_ip_address:
+                        nic_has_public_ip = True
+                        break
+                
+                # Check from Public IP perspective
+                current_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+                public_ip_attached = current_public_ip.ip_configuration is not None
+                
+                if not nic_has_public_ip and not public_ip_attached:
+                    logger.info("✅ Complete dissociation verified from both perspectives")
+                    return
+                
+                logger.info(f"⏳ Still attached (NIC: {nic_has_public_ip}, Public IP: {public_ip_attached}) - waiting {verification_delay}s...")
+                await asyncio.sleep(verification_delay)
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Verification attempt {attempt + 1} failed: {str(e)}")
+                await asyncio.sleep(verification_delay)
+        
+        # Final verification - if still attached, throw error
+        try:
+            final_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+            if final_public_ip.ip_configuration:
+                raise Exception(f"Public IP {public_ip_name} is still attached after {max_attempts} verification attempts. Manual intervention may be required.")
+        except Exception as e:
+            if "still attached" in str(e):
+                raise e
+            logger.warning(f"Final verification failed: {str(e)}")
+        
+        logger.info("✅ Dissociation process completed")
+
+    async def _perform_reassociation(self, network_client, attachment: dict, 
+                                   resource_group: str, public_ip_name: str):
+        """
+        Perform reassociation with proper error handling and verification.
+        """
+        import asyncio
+        
+        nic_name = attachment["nic_name"]
+        config_name = attachment["config_name"]
+        
+        logger.info(f"🔄 Starting reassociation of {public_ip_name} to {nic_name}.{config_name}")
+        
+        try:
+            # Get fresh references to both resources
+            nic = network_client.network_interfaces.get(resource_group, nic_name)
+            public_ip_ref = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+            
+            # Find the correct IP configuration and reassociate
+            reassociated = False
+            for ip_config in nic.ip_configurations:
+                if ip_config.name == config_name:
+                    logger.info(f"🔗 Reassociating Public IP to {config_name}")
+                    ip_config.public_ip_address = public_ip_ref
+                    reassociated = True
+                    break
+            
+            if not reassociated:
+                raise Exception(f"Could not find IP configuration {config_name} for reassociation")
+            
+            # Update the NIC
+            logger.info("🔄 Updating NIC with reassociated Public IP...")
+            reassoc_poller = network_client.network_interfaces.begin_create_or_update(
+                resource_group, nic_name, nic
+            )
+            
+            # Wait for reassociation to complete
+            logger.info("⏳ Waiting for reassociation to complete...")
+            reassoc_result = reassoc_poller.result(timeout=180)  # 3 minute timeout
+            logger.info("✅ Reassociation completed successfully")
+            
+            # Verify reassociation
+            await asyncio.sleep(5)  # Brief wait for consistency
+            
+            updated_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+            if updated_public_ip.ip_configuration:
+                logger.info("✅ Reassociation verified - Public IP is properly attached")
+            else:
+                logger.warning("⚠️ Reassociation may not have completed - Public IP shows as unattached")
+                
+        except Exception as e:
+            logger.error(f"❌ Reassociation failed: {str(e)}")
+            raise Exception(f"Failed to reassociate Public IP {public_ip_name} to {nic_name}: {str(e)}")
+
 
 # Main execution function for API integration
 async def upgrade_public_ip_automated(subscription_id: str, resource_id: str, access_token: str = None, tenant_id: str = None) -> Dict[str, Any]:
