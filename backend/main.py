@@ -369,13 +369,57 @@ async def test_frontend_data():
         "subscriptions_scanned": "test"
     }
 
+@app.get("/api/debug/deprecated-simple")
+async def debug_deprecated_simple():
+    """Simple debug endpoint to help troubleshoot deprecated resources query."""
+    return {
+        "debug_info": {
+            "current_query": """
+            Resources
+            | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+            | extend skuName = case(
+                isnotnull(properties.sku.name), tostring(properties.sku.name),
+                isnotnull(properties.sku), tostring(properties.sku),
+                ""
+            )
+            | extend skuTier = case(
+                isnotnull(properties.sku.tier), tostring(properties.sku.tier),
+                ""
+            )
+            | extend accessTier = case(
+                isnotnull(properties.accessTier), tostring(properties.accessTier),
+                ""
+            )
+            | where skuName =~ "Basic" 
+               or skuTier =~ "Basic"
+               or skuName =~ "Standard_LRS"
+               or skuName contains "Basic"
+               or accessTier =~ "Archive"
+            | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, properties
+            | limit 100
+            """,
+            "explanation": "This query searches for Public IPs, Load Balancers, and Storage Accounts with Basic SKU or deprecated configurations",
+            "possible_issues": [
+                "No Basic SKU resources exist in tenant",
+                "Resources might be using different property paths",
+                "Query conditions might be too restrictive",
+                "Resources might be using Standard SKU already"
+            ],
+            "suggested_actions": [
+                "Try the /api/test/deprecated-query endpoint with authentication",
+                "Check if you have any Public IPs or Load Balancers in Azure Portal",
+                "Verify if they are using Basic or Standard SKU"
+            ]
+        }
+    }
+
 @app.get("/api/test/deprecated-query")
 async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Test deprecated resources query with multiple approaches."""
     try:
         token = user_info['token']
         
-        # Test 1: Get ALL network and storage resources to see what exists
+        # Test 1: Get ALL network and storage resources to see what exists (no filters)
         query1 = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
@@ -383,38 +427,49 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
         | limit 50
         """
         
-        # Test 2: Look for any SKU properties at all
+        # Test 2: Look for any SKU properties at all (show actual data structure)
         query2 = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
         | extend skuInfo = tostring(properties.sku)
         | extend skuName = tostring(properties.sku.name)
         | extend skuTier = tostring(properties.sku.tier)
-        | project id, name, type, skuInfo, skuName, skuTier, properties
+        | extend allProperties = tostring(properties)
+        | project id, name, type, skuInfo, skuName, skuTier, allProperties
         | limit 20
         """
         
-        # Test 3: Specific Basic SKU search with case variations
+        # Test 3: VERY broad search - any resource with "basic" anywhere
         query3 = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
-        | where tostring(properties.sku.name) =~ "Basic" 
-           or tostring(properties.sku.tier) =~ "Basic"
-           or tostring(properties.sku.name) == "Basic"
-           or tostring(properties.sku.tier) == "Basic"
+        | extend propsString = tostring(properties)
+        | where propsString contains "Basic" or propsString contains "basic"
+           or tostring(properties.sku.name) contains "Basic"
+           or tostring(properties.sku.tier) contains "Basic"
         | project id, name, type, properties
         | limit 20
         """
         
-        # Test 4: Storage accounts with deprecated configurations
+        # Test 4: Storage accounts - check all configurations
         query4 = """
         Resources
         | where type == "microsoft.storage/storageaccounts"
         | extend skuName = tostring(properties.sku.name)
         | extend accessTier = tostring(properties.accessTier)
         | extend kind = tostring(kind)
-        | project id, name, skuName, accessTier, kind, properties
+        | extend allProps = tostring(properties)
+        | project id, name, skuName, accessTier, kind, allProps
         | limit 20
+        """
+        
+        # Test 5: Show me EVERYTHING - let's see what resources you actually have
+        query5 = """
+        Resources
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+        | extend resourceInfo = pack("type", type, "sku", properties.sku, "accessTier", properties.accessTier)
+        | project id, name, type, location, resourceInfo, properties
+        | limit 30
         """
         
         url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
@@ -427,7 +482,7 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
         
         async with httpx.AsyncClient(timeout=60) as client:
             # Test all queries
-            for i, query in enumerate([query1, query2, query3, query4], 1):
+            for i, query in enumerate([query1, query2, query3, query4, query5], 1):
                 try:
                     response = await client.post(url, headers=headers, json={"query": query})
                     if response.status_code == 200:
@@ -441,14 +496,15 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
                             
                             results[f"test_{i}"] = {
                                 "query_description": [
-                                    "All network/storage resources",
-                                    "SKU property analysis", 
-                                    "Basic SKU specific search",
-                                    "Storage account analysis"
+                                    "All network/storage resources (no filters)",
+                                    "SKU property structure analysis", 
+                                    "Very broad Basic SKU search (any 'basic' text)",
+                                    "Storage account detailed analysis",
+                                    "Complete resource information dump"
                                 ][i-1],
                                 "count": len(rows),
                                 "columns": column_names,
-                                "sample_data": rows[:3] if rows else [],
+                                "sample_data": rows[:2] if rows else [],  # Show 2 samples max
                                 "success": True
                             }
                         else:
@@ -462,10 +518,16 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
             "success": True,
             "results": results,
             "summary": {
-                "total_network_storage": results.get("test_1", {}).get("count", 0),
-                "sku_analysis": results.get("test_2", {}).get("count", 0),
-                "basic_sku_found": results.get("test_3", {}).get("count", 0),
-                "storage_accounts": results.get("test_4", {}).get("count", 0)
+                "total_network_storage_resources": results.get("test_1", {}).get("count", 0),
+                "resources_with_sku_info": results.get("test_2", {}).get("count", 0),
+                "broad_basic_search_results": results.get("test_3", {}).get("count", 0),
+                "storage_accounts": results.get("test_4", {}).get("count", 0),
+                "total_detailed_info": results.get("test_5", {}).get("count", 0)
+            },
+            "diagnosis": {
+                "if_all_zero": "Your tenant might not have Public IPs, Load Balancers, or Storage Accounts",
+                "if_test1_has_results_but_others_zero": "Resources exist but none have Basic SKU configuration",
+                "check_sample_data": "Look at sample_data in each test to see actual resource structure"
             }
         }
         
