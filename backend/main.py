@@ -546,37 +546,86 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
 
 @app.get("/api/test/upgrade-agents")
 def test_upgrade_agents():
-    """Test endpoint to show system status."""
-    return {
-        "status": "test_completed",
-        "system_mode": "manual_guidance_mode",
-        "upgrade_agents": {
-            "public_ip_agent": {
-                "loaded": False,
-                "status": "Manual guidance available"
-            },
-            "load_balancer_agent": {
-                "loaded": False,
-                "status": "Manual guidance available"
-            },
-            "storage_account_agent": {
-                "loaded": False,
-                "status": "Manual guidance available"
+    """Test endpoint to diagnose upgrade agent status and imports."""
+    import sys
+    import os
+    
+    try:
+        # Test agents directory
+        agents_path = os.path.join(os.path.dirname(__file__), 'agents')
+        agents_exists = os.path.exists(agents_path)
+        
+        # List agent files
+        agent_files = []
+        if agents_exists:
+            agent_files = [f for f in os.listdir(agents_path) if f.endswith('.py')]
+        
+        # Test orchestrator import
+        orchestrator_import_success = False
+        orchestrator_error = None
+        try:
+            if agents_path not in sys.path:
+                sys.path.insert(0, agents_path)
+            from agents.upgrade_orchestrator import AutomatedUpgradeOrchestrator
+            orchestrator_import_success = True
+        except Exception as e:
+            orchestrator_error = str(e)
+        
+        # Test orchestrator initialization
+        orchestrator_init_success = False
+        orchestrator_init_error = None
+        if orchestrator_import_success:
+            try:
+                orchestrator = AutomatedUpgradeOrchestrator("test-subscription-id")
+                orchestrator_init_success = True
+            except Exception as e:
+                orchestrator_init_error = str(e)
+        
+        # Test agent imports
+        agent_imports = {}
+        for agent_name in ['upgrade_public_ip', 'upgrade_load_balancer', 'upgrade_storage_account']:
+            try:
+                module = __import__(f'agents.{agent_name}', fromlist=[agent_name])
+                agent_imports[agent_name] = {
+                    "success": True,
+                    "has_automated_function": hasattr(module, f'{agent_name}_automated')
+                }
+            except Exception as e:
+                agent_imports[agent_name] = {
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        return {
+            "status": "diagnostic_complete",
+            "system_info": {
+                "agents_directory_exists": agents_exists,
+                "agents_path": agents_path,
+                "agent_files": agent_files,
+                "python_path_includes_agents": agents_path in sys.path
             },
             "orchestrator": {
-                "loaded": False,
-                "status": "Manual guidance available"
+                "import_success": orchestrator_import_success,
+                "import_error": orchestrator_error,
+                "initialization_success": orchestrator_init_success,
+                "initialization_error": orchestrator_init_error
+            },
+            "agents": agent_imports,
+            "timestamp": datetime.now().isoformat(),
+            "diagnosis": {
+                "all_agents_ready": orchestrator_init_success and all(
+                    agent.get("success", False) for agent in agent_imports.values()
+                ),
+                "recommended_action": "Check orchestrator and agent initialization errors above"
             }
-        },
-        "test_timestamp": "2025-07-29",
-        "summary": {
-            "agents_loaded": 0,
-            "total_agents": 4,
-            "automation_available": False,
-            "fallback_mode": True,
-            "message": "System providing intelligent manual guidance"
         }
-    }
+        
+    except Exception as e:
+        return {
+            "status": "diagnostic_failed",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.post("/api/scan/orphaned")
 async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
