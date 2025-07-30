@@ -822,7 +822,6 @@ function App() {
                   onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
                 >
                   <span className="user-avatar">👤</span>
-                  <span className="user-name">{account.username}</span>
                   <span className="dropdown-arrow">{profileDropdownOpen ? '▲' : '▼'}</span>
                 </button>
                 {profileDropdownOpen && (

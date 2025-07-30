@@ -99,13 +99,15 @@ class PublicIPUpgradeAgent:
         logger.info(f"🚀 Starting Public IP upgrade: {resource_id}")
         
         try:
-            # If we have access token, use HTTP-based upgrade
-            if self.access_token and HTTPX_AVAILABLE:
-                return await self._upgrade_via_http(resource_id)
-            
-            # Check if Azure SDK is available as fallback
-            elif self.sdk_available and self.network_client:
+            # Prioritize Azure SDK approach for better dissociation handling
+            if self.sdk_available and self.network_client:
+                logger.info("🔧 Using Azure SDK approach (primary method)")
                 return await self._upgrade_via_sdk(resource_id)
+            
+            # Fallback to HTTP-based upgrade if SDK not available
+            elif self.access_token and HTTPX_AVAILABLE:
+                logger.info("🔧 Using HTTP API approach (fallback method)")
+                return await self._upgrade_via_http(resource_id)
             
             # No authentication method available
             else:
@@ -296,15 +298,161 @@ class PublicIPUpgradeAgent:
             }
     
     async def _upgrade_via_sdk(self, resource_id: str) -> Dict[str, Any]:
-        """Upgrade Public IP using Azure SDK (fallback method)."""
-        # Implement SDK-based upgrade as fallback
-        # For now, return not implemented to focus on HTTP method
-        return {
-            "success": False,
-            "error": "SDK upgrade temporarily disabled",
-            "message": "Using HTTP API method instead of Azure SDK",
-            "fallback_required": True
-        }
+        """Upgrade Public IP using Azure SDK - proper dissociation approach."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.network import NetworkManagementClient
+            import asyncio
+            
+            logger.info("🔧 Using Azure SDK approach for Public IP upgrade")
+            
+            # Parse resource ID to extract components
+            parts = resource_id.split("/")
+            subscription_id = parts[2]
+            resource_group = parts[4]
+            public_ip_name = parts[8]
+            
+            logger.info(f"📋 Subscription: {subscription_id}")
+            logger.info(f"📋 Resource Group: {resource_group}")
+            logger.info(f"📋 Public IP Name: {public_ip_name}")
+            
+            # Initialize Azure SDK client
+            credential = DefaultAzureCredential()
+            network_client = NetworkManagementClient(credential, subscription_id)
+            
+            # Step 1: Get current Public IP configuration
+            logger.info("📊 Step 1: Getting current Public IP configuration...")
+            public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+            
+            logger.info(f"📊 Current SKU: {public_ip.sku.name}")
+            
+            # Check if already Standard
+            if public_ip.sku.name.lower() == "standard":
+                return {
+                    "success": True,
+                    "message": "Public IP is already using Standard SKU",
+                    "sku_before": "Standard",
+                    "sku_after": "Standard",
+                    "no_change_required": True
+                }
+            
+            # Step 2: Handle dissociation if attached
+            attached_nic = None
+            attached_config_name = None
+            
+            if public_ip.ip_configuration:
+                logger.info("🔗 Step 2: Public IP is attached - performing SDK-based dissociation...")
+                
+                # Extract NIC information from IP configuration
+                ip_config_id = public_ip.ip_configuration.id
+                nic_parts = ip_config_id.split("/")
+                nic_name = nic_parts[8]  # network interface name
+                attached_config_name = nic_parts[10]  # IP configuration name
+                
+                logger.info(f"🔌 Attached to NIC: {nic_name}, Config: {attached_config_name}")
+                
+                # Get the NIC
+                nic = network_client.network_interfaces.get(resource_group, nic_name)
+                attached_nic = nic
+                
+                # Find and remove the public IP reference
+                for ip_config in nic.ip_configurations:
+                    if ip_config.name == attached_config_name:
+                        if ip_config.public_ip_address:
+                            logger.info(f"🔌 Removing Public IP from {ip_config.name}")
+                            ip_config.public_ip_address = None
+                        break
+                
+                # Update the NIC using SDK
+                logger.info("🔄 Updating NIC to remove Public IP reference...")
+                poller = network_client.network_interfaces.begin_create_or_update(
+                    resource_group, nic_name, nic
+                )
+                
+                # Wait for the operation to complete
+                logger.info("⏳ Waiting for NIC update to complete...")
+                result = poller.result()
+                logger.info("✅ NIC update completed")
+                
+                # Additional wait for Azure to process
+                logger.info("⏳ Waiting for Azure to process dissociation...")
+                await asyncio.sleep(10)
+                
+                # Verify dissociation
+                updated_public_ip = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+                if updated_public_ip.ip_configuration:
+                    logger.warning("⚠️ Public IP still shows attachment after dissociation")
+                else:
+                    logger.info("✅ Dissociation verified")
+            else:
+                logger.info("🔗 Step 2: Public IP is not attached")
+            
+            # Step 3: Upgrade to Standard SKU
+            logger.info("🔄 Step 3: Upgrading SKU to Standard...")
+            
+            # Update the Public IP SKU
+            public_ip.sku.name = "Standard"
+            if hasattr(public_ip, 'public_ip_allocation_method'):
+                public_ip.public_ip_allocation_method = "Static"
+            
+            # Perform the upgrade
+            logger.info("🚀 Performing SDK-based SKU upgrade...")
+            upgrade_poller = network_client.public_ip_addresses.begin_create_or_update(
+                resource_group, public_ip_name, public_ip
+            )
+            
+            # Wait for upgrade to complete
+            logger.info("⏳ Waiting for SKU upgrade to complete...")
+            upgrade_result = upgrade_poller.result()
+            logger.info("✅ SKU upgrade completed")
+            
+            # Step 4: Reassociate if it was attached
+            if attached_nic and attached_config_name:
+                logger.info("🔄 Step 4: Reassociating Public IP...")
+                
+                # Get the updated Public IP reference
+                updated_public_ip_ref = network_client.public_ip_addresses.get(resource_group, public_ip_name)
+                
+                # Reassociate
+                for ip_config in attached_nic.ip_configurations:
+                    if ip_config.name == attached_config_name:
+                        ip_config.public_ip_address = updated_public_ip_ref
+                        break
+                
+                # Update the NIC again
+                reassoc_poller = network_client.network_interfaces.begin_create_or_update(
+                    resource_group, attached_nic.name, attached_nic
+                )
+                
+                logger.info("⏳ Waiting for reassociation to complete...")
+                reassoc_result = reassoc_poller.result()
+                logger.info("✅ Reassociation completed")
+            
+            return {
+                "success": True,
+                "message": "Public IP successfully upgraded using Azure SDK",
+                "sku_before": "Basic",
+                "sku_after": "Standard",
+                "resource_id": resource_id,
+                "upgrade_method": "azure_sdk",
+                "allocation_method": "Static",
+                "attached_nic": attached_nic.name if attached_nic else None,
+                "details": {
+                    "upgrade_completed": True,
+                    "sdk_based": True,
+                    "dissociation_performed": attached_nic is not None,
+                    "reassociation_performed": attached_nic is not None
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ SDK-based upgrade failed: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Azure SDK upgrade failed: {str(e)}",
+                "upgrade_method": "azure_sdk"
+            }
     
     async def _dissociate_public_ip_http(self, ip_config_id: str, public_ip_url: str, client, headers) -> Dict[str, Any]:
         """Dissociate Public IP from network interface using HTTP API."""
