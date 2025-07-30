@@ -709,29 +709,49 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # More comprehensive query for deprecated resources - cast all possible formats
+        # MUCH BROADER query for deprecated resources - remove restrictive conditions
         query = """
         Resources
-        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts", "microsoft.compute/virtualmachines", "microsoft.sql/servers")
         | extend skuName = case(
             isnotnull(properties.sku.name), tostring(properties.sku.name),
             isnotnull(properties.sku), tostring(properties.sku),
+            isnotnull(sku.name), tostring(sku.name),
+            isnotnull(sku), tostring(sku),
             ""
         )
         | extend skuTier = case(
             isnotnull(properties.sku.tier), tostring(properties.sku.tier),
+            isnotnull(sku.tier), tostring(sku.tier),
             ""
         )
         | extend accessTier = case(
             isnotnull(properties.accessTier), tostring(properties.accessTier),
             ""
         )
+        | extend performanceTier = case(
+            isnotnull(properties.performanceTier), tostring(properties.performanceTier),
+            ""
+        )
+        | extend vmSize = case(
+            isnotnull(properties.hardwareProfile.vmSize), tostring(properties.hardwareProfile.vmSize),
+            ""
+        )
         | where skuName =~ "Basic" 
            or skuTier =~ "Basic"
-           or skuName =~ "Standard_LRS"
            or skuName contains "Basic"
+           or skuTier contains "Basic"
+           or skuName =~ "Standard_LRS"
+           or skuName =~ "Standard_GRS"
            or accessTier =~ "Archive"
-        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, properties
+           or performanceTier =~ "P4"
+           or performanceTier =~ "P6"
+           or vmSize contains "A1"
+           or vmSize contains "A2"
+           or vmSize contains "Standard_A"
+           or contains(tostring(properties), "Basic")
+           or contains(tostring(sku), "Basic")
+        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, performanceTier, vmSize, properties, sku
         | limit 100
         """
         
@@ -783,6 +803,37 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                         resources = result["value"]
                         logger.info(f"📊 Using 'value' format, found {len(resources)} resources")
                 
+                # If no resources found with the main query, try a simpler fallback query
+                if len(resources) == 0:
+                    logger.info("📊 No resources found with main query, trying fallback query...")
+                    
+                    fallback_query = """
+                    Resources
+                    | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+                    | limit 20
+                    """
+                    
+                    fallback_data = {"query": fallback_query}
+                    if subscriptions:
+                        fallback_data["subscriptions"] = subscriptions
+                    
+                    fallback_response = await client.post(url, headers=headers, json=fallback_data)
+                    if fallback_response.status_code == 200:
+                        fallback_result = fallback_response.json()
+                        fallback_data_content = fallback_result.get("data", {})
+                        
+                        if isinstance(fallback_data_content, dict):
+                            fallback_rows = fallback_data_content.get("rows", [])
+                            fallback_columns = fallback_data_content.get("columns", [])
+                            
+                            if fallback_columns and fallback_rows:
+                                fallback_column_names = [col["name"] for col in fallback_columns]
+                                for row in fallback_rows:
+                                    fallback_resource_dict = dict(zip(fallback_column_names, row))
+                                    resources.append(fallback_resource_dict)
+                                    
+                                logger.info(f"📊 FALLBACK: Found {len(fallback_rows)} resources with simple query")
+                
                 logger.info(f"📊 Final parsed deprecated resources count: {len(resources)}")
                 if resources:
                     logger.info(f"🔍 Sample deprecated resource: {list(resources[0].keys()) if resources[0] else 'empty'}")
@@ -794,27 +845,50 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     sku_name = resource.get("skuName", "")
                     sku_tier = resource.get("skuTier", "")
                     access_tier = resource.get("accessTier", "")
+                    performance_tier = resource.get("performanceTier", "")
+                    vm_size = resource.get("vmSize", "")
                     
+                    # Determine upgrade type and description based on resource type and configuration
                     if "publicipaddresses" in resource_type:
                         upgrade_type = "public_ip"
-                        description = f"Basic SKU Public IP (deprecated) - SKU: {sku_name}/{sku_tier}"
-                        recommendation = "Upgrade to Standard SKU Public IP for better performance and availability"
+                        description = f"Public IP with potential optimization - SKU: {sku_name}/{sku_tier}"
+                        recommendation = "Review and potentially upgrade to Standard SKU for better performance"
+                        
                     elif "loadbalancers" in resource_type:
                         upgrade_type = "load_balancer"
-                        description = f"Basic SKU Load Balancer (deprecated) - SKU: {sku_name}/{sku_tier}"
-                        recommendation = "Upgrade to Standard SKU Load Balancer for improved features"
+                        description = f"Load Balancer with potential optimization - SKU: {sku_name}/{sku_tier}"
+                        recommendation = "Review and potentially upgrade to Standard SKU for improved features"
+                        
                     elif "storageaccounts" in resource_type:
                         upgrade_type = "storage_account"
                         if access_tier == "Archive":
                             description = f"Archive tier storage account - consider lifecycle management"
                             recommendation = "Review access patterns and consider Hot/Cool tiers for frequently accessed data"
+                        elif "LRS" in sku_name:
+                            description = f"Storage account using LRS - consider redundancy upgrade - SKU: {sku_name}"
+                            recommendation = "Consider upgrading to GRS or ZRS for better data redundancy"
                         else:
-                            description = f"Storage account with deprecated configuration - SKU: {sku_name}"
+                            description = f"Storage account with optimization opportunity - SKU: {sku_name}"
                             recommendation = "Review storage account configuration for optimization opportunities"
+                            
+                    elif "virtualmachines" in resource_type:
+                        upgrade_type = "virtual_machine"
+                        if "A1" in vm_size or "A2" in vm_size or "Standard_A" in vm_size:
+                            description = f"VM using older generation size - Size: {vm_size}"
+                            recommendation = "Consider upgrading to newer generation VM sizes for better performance and cost efficiency"
+                        else:
+                            description = f"VM with potential optimization - Size: {vm_size}"
+                            recommendation = "Review VM size for optimization opportunities"
+                            
+                    elif "sql/servers" in resource_type:
+                        upgrade_type = "sql_server"
+                        description = f"SQL Server with potential optimization - Performance: {performance_tier}"
+                        recommendation = "Review SQL Server configuration and consider performance tier optimization"
+                        
                     else:
-                        upgrade_type = "unknown"
-                        description = f"Deprecated configuration detected - SKU: {sku_name}"
-                        recommendation = "Review resource configuration and upgrade if needed"
+                        upgrade_type = "general"
+                        description = f"Resource with deprecated or suboptimal configuration - SKU: {sku_name}"
+                        recommendation = "Review resource configuration and consider upgrades for better performance"
                     
                     formatted_resources.append({
                         "id": resource.get("id", ""),
@@ -830,7 +904,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                         "actions": [
                             {
                                 "type": "upgrade",
-                                "description": f"Upgrade {upgrade_type.replace('_', ' ').title()}",
+                                "description": f"Optimize {upgrade_type.replace('_', ' ').title()}",
                                 "riskLevel": "Medium",
                                 "confirmationRequired": True,
                                 "estimatedTimeToComplete": "10-30 minutes"
