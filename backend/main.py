@@ -1,6 +1,7 @@
 import os
 import logging
 import httpx
+import json
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.staticfiles import StaticFiles
@@ -201,13 +202,14 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # Basic query for orphaned disks
+        # Enhanced query for orphaned disks with better detection
         query = """
         Resources
         | where type == "microsoft.compute/disks"
-        | where isnull(properties.managedBy)
-        | project id, name, resourceGroup, location, type, properties.diskSizeGB, subscriptionId
-        | limit 50
+        | where isnull(properties.managedBy) or properties.managedBy == ""
+        | extend diskSizeGB = toint(properties.diskSizeGB)
+        | project id, name, resourceGroup, location, type, diskSizeGB, subscriptionId, properties
+        | limit 100
         """
         
         url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
@@ -232,6 +234,9 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                 data_content = result.get("data", {})
                 resources = []
                 
+                logger.info(f"🔍 Full response structure: {list(result.keys())}")
+                logger.info(f"🔍 Data content type: {type(data_content)}")
+                
                 if isinstance(data_content, dict):
                     # Standard Resource Graph format with rows and columns
                     rows = data_content.get("rows", [])
@@ -241,23 +246,43 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                     
                     if columns and rows:
                         column_names = [col["name"] for col in columns]
+                        logger.info(f"🏷️ Column names: {column_names}")
                         for row in rows:
                             resource_dict = dict(zip(column_names, row))
                             resources.append(resource_dict)
                 elif isinstance(data_content, list):
                     # Direct list format (fallback)
                     resources = data_content
+                    logger.info(f"📊 Using direct list format, found {len(resources)} resources")
+                else:
+                    # Additional fallback for value format
+                    if "value" in result:
+                        resources = result["value"]
+                        logger.info(f"📊 Using 'value' format, found {len(resources)} resources")
                 
-                logger.info(f"📊 Parsed {len(resources)} orphaned resources")
+                logger.info(f"📊 Final parsed resources count: {len(resources)}")
+                if resources:
+                    logger.info(f"🔍 Sample resource: {list(resources[0].keys()) if resources[0] else 'empty'}")
                 
                 # Format resources for frontend
                 formatted_resources = []
                 for resource in resources:
+                    # Try different ways to get disk size
                     disk_size = 0
-                    if 'properties_diskSizeGB' in resource:
+                    if 'diskSizeGB' in resource:
+                        disk_size = resource.get('diskSizeGB', 0)
+                    elif 'properties_diskSizeGB' in resource:
                         disk_size = resource.get('properties_diskSizeGB', 0)
                     elif 'properties.diskSizeGB' in resource:
                         disk_size = resource.get('properties.diskSizeGB', 0)
+                    elif isinstance(resource.get('properties'), dict):
+                        disk_size = resource.get('properties', {}).get('diskSizeGB', 0)
+                    
+                    # Ensure disk_size is a number
+                    try:
+                        disk_size = int(disk_size) if disk_size else 0
+                    except (ValueError, TypeError):
+                        disk_size = 0
                     
                     formatted_resources.append({
                         "id": resource.get("id", ""),
@@ -267,8 +292,8 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                         "location": resource.get("location", ""),
                         "subscriptionId": resource.get("subscriptionId", ""),
                         "priority": "Medium",
-                        "cost_impact": f"${disk_size * 0.05:.2f}/month estimated",
-                        "analysis": "Orphaned disk - not attached to any VM"
+                        "cost_impact": f"${disk_size * 0.05:.2f}/month estimated" if disk_size > 0 else "Unknown cost",
+                        "analysis": f"Orphaned disk ({disk_size}GB) - not attached to any VM" if disk_size > 0 else "Orphaned disk - not attached to any VM"
                     })
                 
                 return {
@@ -306,13 +331,13 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # Basic query for deprecated resources
+        # Enhanced query for deprecated resources 
         query = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
-        | where properties.sku.name == "Basic"
-        | project id, name, resourceGroup, location, type, subscriptionId
-        | limit 50
+        | where properties.sku.name =~ "Basic" or properties.sku.tier =~ "Basic"
+        | project id, name, resourceGroup, location, type, subscriptionId, properties
+        | limit 100
         """
         
         url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
@@ -337,6 +362,9 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                 data_content = result.get("data", {})
                 resources = []
                 
+                logger.info(f"🔍 Deprecated scan - Full response structure: {list(result.keys())}")
+                logger.info(f"🔍 Deprecated scan - Data content type: {type(data_content)}")
+                
                 if isinstance(data_content, dict):
                     # Standard Resource Graph format with rows and columns
                     rows = data_content.get("rows", [])
@@ -346,14 +374,23 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     
                     if columns and rows:
                         column_names = [col["name"] for col in columns]
+                        logger.info(f"🏷️ Column names: {column_names}")
                         for row in rows:
                             resource_dict = dict(zip(column_names, row))
                             resources.append(resource_dict)
                 elif isinstance(data_content, list):
                     # Direct list format (fallback)
                     resources = data_content
+                    logger.info(f"📊 Using direct list format, found {len(resources)} resources")
+                else:
+                    # Additional fallback for value format
+                    if "value" in result:
+                        resources = result["value"]
+                        logger.info(f"📊 Using 'value' format, found {len(resources)} resources")
                 
-                logger.info(f"📊 Parsed {len(resources)} deprecated resources")
+                logger.info(f"📊 Final parsed deprecated resources count: {len(resources)}")
+                if resources:
+                    logger.info(f"🔍 Sample deprecated resource: {list(resources[0].keys()) if resources[0] else 'empty'}")
                 
                 # Format resources for frontend
                 formatted_resources = []
