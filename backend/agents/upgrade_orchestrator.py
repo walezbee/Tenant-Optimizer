@@ -23,6 +23,14 @@ import importlib
 import sys
 import os
 
+# HTTP client for direct API calls
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+    httpx = None
+
 # Optional Azure SDK imports - graceful fallback if not available
 try:
     from azure.identity import DefaultAzureCredential
@@ -55,8 +63,19 @@ class AutomatedUpgradeOrchestrator:
     def __init__(self, subscription_id: str):
         """Initialize the orchestrator."""
         self.subscription_id = subscription_id
-        self.credential = DefaultAzureCredential()
-        self.resource_client = ResourceManagementClient(self.credential, subscription_id)
+        
+        # Try to initialize Azure SDK if available
+        try:
+            if AZURE_SDK_AVAILABLE:
+                self.credential = DefaultAzureCredential()
+                self.resource_client = ResourceManagementClient(self.credential, subscription_id)
+                logger.info("🔑 Orchestrator using DefaultAzureCredential for authentication")
+            else:
+                raise Exception("Azure SDK not available")
+        except Exception as e:
+            logger.warning(f"⚠️ Azure SDK authentication failed: {e}")
+            self.credential = None
+            self.resource_client = None
         
         # Track available agents
         self.agents = {
@@ -64,6 +83,24 @@ class AutomatedUpgradeOrchestrator:
             'Microsoft.Network/loadBalancers': 'upgrade_load_balancer', 
             'Microsoft.Storage/storageAccounts': 'upgrade_storage_account'
         }
+        
+    async def _get_resource_via_http(self, resource_id: str) -> Dict[str, Any]:
+        """Get resource information using HTTP API calls with access token."""
+        if not self.access_token or not HTTPX_AVAILABLE:
+            raise Exception("HTTP API access not available - no access token or httpx not installed")
+            
+        url = f"https://management.azure.com{resource_id}?api-version=2021-04-01"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise Exception(f"Failed to get resource: {response.status_code} - {response.text}")
         
     async def upgrade_resource(self, resource_id: str, resource_type: str = None) -> Dict[str, Any]:
         """
@@ -209,30 +246,48 @@ class AutomatedUpgradeOrchestrator:
     async def _get_resource_details(self, resource_id: str) -> Optional[Dict[str, Any]]:
         """Get basic resource details for context."""
         try:
-            # Extract resource group and name from ID
-            parts = resource_id.strip('/').split('/')
-            if len(parts) >= 8:
-                resource_group = parts[3]
-                resource_name = parts[-1]
-                provider_namespace = parts[5]
-                resource_type = parts[6]
-                
-                # Get resource using the Resource Management API
-                resource = self.resource_client.resources.get(
-                    resource_group_name=resource_group,
-                    resource_provider_namespace=provider_namespace,
-                    parent_resource_path='',
-                    resource_type=resource_type,
-                    resource_name=resource_name,
-                    api_version='2021-04-01'
-                )
-                
+            # Use HTTP API if access token is available
+            if self.access_token:
+                resource_data = await self._get_resource_via_http(resource_id)
                 return {
-                    'name': resource.name,
-                    'location': resource.location,
-                    'type': resource.type,
-                    'tags': resource.tags
+                    'name': resource_data.get('name', ''),
+                    'type': resource_data.get('type', ''),
+                    'location': resource_data.get('location', ''),
+                    'properties': resource_data.get('properties', {}),
+                    'sku': resource_data.get('sku', {})
                 }
+            
+            # Fallback to Azure SDK
+            elif self.resource_client:
+                # Extract resource group and name from ID
+                parts = resource_id.strip('/').split('/')
+                if len(parts) >= 8:
+                    resource_group = parts[3]
+                    resource_name = parts[-1]
+                    provider_namespace = parts[5]
+                    resource_type = parts[6]
+                    
+                    # Get resource using the Resource Management API
+                    resource = self.resource_client.resources.get(
+                        resource_group_name=resource_group,
+                        resource_provider_namespace=provider_namespace,
+                        parent_resource_path='',
+                        resource_type=resource_type,
+                        resource_name=resource_name,
+                        api_version='2021-04-01'
+                    )
+                    
+                    return {
+                        'name': resource.name,
+                        'location': resource.location,
+                        'type': resource.type,
+                        'properties': getattr(resource, 'properties', {}),
+                        'sku': getattr(resource, 'sku', {}),
+                        'tags': resource.tags
+                    }
+            else:
+                raise Exception("No authentication method available")
+                
         except Exception as e:
             logger.warning(f"Could not get resource details: {str(e)}")
         return None

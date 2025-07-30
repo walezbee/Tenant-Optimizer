@@ -19,6 +19,14 @@ from typing import Dict, List, Any, Optional, Tuple
 import json
 import time
 
+# HTTP client for direct API calls
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+    httpx = None
+
 # Optional Azure SDK imports - graceful fallback if not available
 try:
     from azure.identity import DefaultAzureCredential
@@ -57,13 +65,18 @@ class PublicIPUpgradeAgent:
         self.subscription_id = subscription_id
         self.sdk_available = AZURE_SDK_AVAILABLE
         
-        if self.sdk_available:
-            self.credential = DefaultAzureCredential()
-            self.network_client = NetworkManagementClient(self.credential, subscription_id)
-        else:
+        # Try to initialize Azure SDK if available
+        try:
+            if self.sdk_available:
+                self.credential = DefaultAzureCredential()
+                self.network_client = NetworkManagementClient(self.credential, subscription_id)
+                logger.info("🔑 PublicIP Agent using DefaultAzureCredential for authentication")
+            else:
+                raise Exception("Azure SDK not available")
+        except Exception as e:
+            logger.warning(f"⚠️ PublicIP Agent Azure SDK authentication failed: {e}")
             self.credential = None
             self.network_client = None
-            logger.warning("Azure SDK not available - PublicIPUpgradeAgent running in fallback mode")
         
     async def upgrade_public_ip(self, resource_id: str) -> Dict[str, Any]:
         """

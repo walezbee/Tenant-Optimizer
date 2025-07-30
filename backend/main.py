@@ -1036,6 +1036,7 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
             if agents_path not in sys.path:
                 sys.path.insert(0, agents_path)
             
+            logger.info(f"🔧 Attempting to import orchestrator from: {agents_path}")
             from agents.upgrade_orchestrator import AutomatedUpgradeOrchestrator
             
             logger.info(f"🤖 Using automated upgrade agents for: {resource_id}")
@@ -1049,11 +1050,17 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
                 if len(resource_parts) > 2 and resource_parts[1] == 'subscriptions':
                     subscription_id = resource_parts[2]
             
+            logger.info(f"🔧 Initializing orchestrator with subscription: {subscription_id}")
+            
             # Initialize orchestrator with subscription ID
             orchestrator = AutomatedUpgradeOrchestrator(subscription_id=subscription_id)
             
+            logger.info(f"🔧 Orchestrator initialized, calling upgrade for: {resource_id}")
+            
             # Perform automated upgrade
             result = await orchestrator.upgrade_resource(resource_id)
+            
+            logger.info(f"🎯 Automated upgrade result: {result}")
             
             return {
                 "success": result.get("success", False),
@@ -1068,6 +1075,7 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
             logger.info(f"📋 Automated agents not available, providing manual guidance: {e}")
         except Exception as e:
             logger.warning(f"⚠️ Automated upgrade failed, falling back to manual guidance: {e}")
+            logger.exception("Full automated upgrade error details:")
         
         # Fallback to manual guidance
         resource_name = resource_id.split('/')[-1] if resource_id else "your-resource"
