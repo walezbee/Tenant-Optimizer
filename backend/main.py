@@ -159,6 +159,180 @@ async def get_subscriptions(user_info: Dict[str, Any] = Depends(verify_azure_tok
             "subscriptions": []
         }
 
+@app.get("/api/test/resource-graph")
+async def test_resource_graph(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Test Resource Graph API with a simple query to diagnose issues."""
+    try:
+        token = user_info['token']
+        
+        # Simple test query that should return something in most tenants
+        query = """
+        Resources
+        | where type == "microsoft.resources/subscriptions"
+        | project id, name, type, subscriptionId
+        | limit 5
+        """
+        
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {"query": query}
+        
+        logger.info(f"🧪 Testing Resource Graph API with simple query")
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, headers=headers, json=data)
+            
+            logger.info(f"🧪 Test Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"🧪 Test Response Keys: {list(result.keys())}")
+                
+                data_content = result.get("data", {})
+                logger.info(f"🧪 Data Content Type: {type(data_content)}")
+                logger.info(f"🧪 Data Content Keys: {list(data_content.keys()) if isinstance(data_content, dict) else 'Not a dict'}")
+                
+                if isinstance(data_content, dict):
+                    rows = data_content.get("rows", [])
+                    columns = data_content.get("columns", [])
+                    logger.info(f"🧪 Rows: {len(rows)}, Columns: {len(columns)}")
+                    
+                    if columns:
+                        column_names = [col.get("name", "unknown") for col in columns]
+                        logger.info(f"🧪 Column Names: {column_names}")
+                    
+                    if rows:
+                        logger.info(f"🧪 First Row: {rows[0] if rows else 'No rows'}")
+                
+                return {
+                    "success": True,
+                    "message": "Resource Graph API test completed",
+                    "test_results": {
+                        "response_status": response.status_code,
+                        "response_keys": list(result.keys()),
+                        "data_type": str(type(data_content)),
+                        "data_keys": list(data_content.keys()) if isinstance(data_content, dict) else "Not a dict",
+                        "rows_count": len(data_content.get("rows", [])) if isinstance(data_content, dict) else 0,
+                        "columns_count": len(data_content.get("columns", [])) if isinstance(data_content, dict) else 0,
+                        "raw_response_sample": str(result)[:500] + "..." if len(str(result)) > 500 else str(result)
+                    }
+                }
+            else:
+                logger.error(f"🧪 Test failed with status {response.status_code}: {response.text}")
+                return {
+                    "success": False,
+                    "message": f"Resource Graph API test failed: {response.status_code}",
+                    "error": response.text
+                }
+                
+    except Exception as e:
+        logger.error(f"🧪 Test exception: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Test failed with exception: {str(e)}"
+        }
+
+@app.get("/api/test/disk-query")
+async def test_disk_query(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Test specific disk query to see if we can find any disks at all."""
+    try:
+        token = user_info['token']
+        
+        # First, let's just find all disks, regardless of orphaned status
+        query = """
+        Resources
+        | where type == "microsoft.compute/disks"
+        | project id, name, resourceGroup, location, type, properties, subscriptionId
+        | limit 10
+        """
+        
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {"query": query}
+        
+        logger.info(f"💿 Testing disk query to find any disks")
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, headers=headers, json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                data_content = result.get("data", {})
+                
+                logger.info(f"💿 Disk query response structure: {list(result.keys())}")
+                
+                if isinstance(data_content, dict):
+                    rows = data_content.get("rows", [])
+                    columns = data_content.get("columns", [])
+                    
+                    logger.info(f"💿 Found {len(rows)} disks with {len(columns)} columns")
+                    
+                    if columns:
+                        column_names = [col.get("name", "unknown") for col in columns]
+                        logger.info(f"💿 Disk columns: {column_names}")
+                    
+                    # Now test orphaned disk query
+                    orphaned_query = """
+                    Resources
+                    | where type == "microsoft.compute/disks"
+                    | where isnull(properties.managedBy) or properties.managedBy == ""
+                    | project id, name, resourceGroup, location, type, properties, subscriptionId
+                    | limit 10
+                    """
+                    
+                    data2 = {"query": orphaned_query}
+                    response2 = await client.post(url, headers=headers, json=data2)
+                    
+                    if response2.status_code == 200:
+                        result2 = response2.json()
+                        data_content2 = result2.get("data", {})
+                        orphaned_rows = data_content2.get("rows", []) if isinstance(data_content2, dict) else []
+                        
+                        logger.info(f"💿 Found {len(orphaned_rows)} orphaned disks")
+                        
+                        return {
+                            "success": True,
+                            "total_disks": len(rows),
+                            "orphaned_disks": len(orphaned_rows),
+                            "columns": column_names if columns else [],
+                            "sample_disk": rows[0] if rows else None,
+                            "sample_orphaned": orphaned_rows[0] if orphaned_rows else None
+                        }
+                    else:
+                        logger.error(f"💿 Orphaned query failed: {response2.status_code}")
+                        return {
+                            "success": True,
+                            "total_disks": len(rows),
+                            "orphaned_query_error": f"Status {response2.status_code}: {response2.text}"
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"Unexpected data format: {type(data_content)}"
+                    }
+            else:
+                logger.error(f"💿 Disk query failed: {response.status_code} - {response.text}")
+                return {
+                    "success": False,
+                    "message": f"Disk query failed: {response.status_code}",
+                    "error": response.text
+                }
+                
+    except Exception as e:
+        logger.error(f"💿 Disk test exception: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Disk test failed: {str(e)}"
+        }
+
 @app.get("/api/test/upgrade-agents")
 def test_upgrade_agents():
     """Test endpoint to show system status."""
