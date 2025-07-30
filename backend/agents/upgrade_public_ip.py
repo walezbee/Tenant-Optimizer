@@ -344,31 +344,66 @@ class PublicIPUpgradeAgent:
             if update_response.status_code in [200, 201, 202]:
                 logger.info("✅ Successfully updated NIC to remove Public IP reference")
                 
-                # Wait for the dissociation to propagate
-                logger.info("⏳ Waiting for dissociation to propagate...")
-                await asyncio.sleep(3)
+                # Wait longer for the dissociation to propagate in Azure
+                logger.info("⏳ Waiting 10 seconds for dissociation to propagate...")
+                await asyncio.sleep(10)
                 
-                # Verify the Public IP is actually dissociated
-                max_retries = 5
+                # Aggressive verification - check both NIC and Public IP status
+                max_retries = 15  # Increased from 5
+                verification_success = False
+                
                 for attempt in range(max_retries):
-                    verify_response = await client.get(public_ip_url, headers=headers)
-                    if verify_response.status_code == 200:
-                        public_ip_data = verify_response.json()
+                    logger.info(f"🔍 Verification attempt {attempt + 1}/{max_retries}")
+                    
+                    # Check Public IP status
+                    public_ip_response = await client.get(public_ip_url, headers=headers)
+                    public_ip_free = False
+                    
+                    if public_ip_response.status_code == 200:
+                        public_ip_data = public_ip_response.json()
                         ip_config_ref = public_ip_data.get("properties", {}).get("ipConfiguration")
                         
                         if not ip_config_ref:
-                            logger.info("✅ Verified: Public IP is fully dissociated")
-                            return {"success": True, "nic_config": nic_config}
+                            public_ip_free = True
+                            logger.info("✅ Public IP shows as free")
                         else:
-                            logger.info(f"⏳ Attempt {attempt + 1}: Public IP still shows association, waiting...")
-                            await asyncio.sleep(2)
-                    else:
-                        logger.warning(f"⚠️ Could not verify dissociation: {verify_response.status_code}")
+                            logger.info(f"⏳ Public IP still attached to: {ip_config_ref.get('id', 'unknown')}")
+                    
+                    # Also check NIC status to double-verify
+                    nic_verify_response = await client.get(nic_url, headers=headers)
+                    nic_clean = False
+                    
+                    if nic_verify_response.status_code == 200:
+                        nic_verify_data = nic_verify_response.json()
+                        ip_configs_verify = nic_verify_data.get("properties", {}).get("ipConfigurations", [])
+                        
+                        for ip_config_verify in ip_configs_verify:
+                            if ip_config_verify.get("name") == config_name:
+                                if "publicIPAddress" not in ip_config_verify.get("properties", {}):
+                                    nic_clean = True
+                                    logger.info("✅ NIC shows Public IP reference removed")
+                                else:
+                                    logger.info("⏳ NIC still shows Public IP reference")
+                                break
+                    
+                    # Both checks must pass
+                    if public_ip_free and nic_clean:
+                        verification_success = True
+                        logger.info("✅ Complete dissociation verified!")
                         break
+                    
+                    # Progressive wait time
+                    wait_time = min(5 + attempt * 2, 30)  # 5, 7, 9, ... up to 30 seconds
+                    logger.info(f"⏳ Waiting {wait_time}s before next verification...")
+                    await asyncio.sleep(wait_time)
                 
-                # If we reach here, verification failed but we'll try to proceed
-                logger.warning("⚠️ Could not fully verify dissociation, but proceeding with upgrade...")
-                return {"success": True, "nic_config": nic_config}
+                if verification_success:
+                    return {"success": True, "nic_config": nic_config}
+                else:
+                    return {
+                        "success": False,
+                        "message": f"Failed to verify complete dissociation after {max_retries} attempts. The Public IP may still be in use."
+                    }
             else:
                 return {
                     "success": False,
