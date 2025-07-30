@@ -1,12 +1,13 @@
-# Microsoft AI-Enhanced Tenant Optimizer - v2.2 FIXED
+# Microsoft AI-Enhanced Tenant Optimizer - v2.2.1 UPGRADED AGENTS
 
-## ✅ Status: FIXED & DEPLOYED
+## ✅ Status: ENHANCED & DEPLOYED
 
-### 🔧 Issues Resolved:
-- **Fixed deprecated resources scan showing 0 results**
-- **Added missing `analyze_resource_deprecation` method**
-- **Fixed hasattr() dictionary key checking issue**  
-- **Reverted to working KQL query**
+### 🔧 Latest Enhancements (v2.2.1):
+- **Enhanced automated upgrade agents with detailed error logging**
+- **Improved orchestrator initialization with better error handling**
+- **Added comprehensive debugging to identify upgrade agent failures**
+- **Maintained full backwards compatibility with v2.2**
+- **Added fallback handling for Azure SDK authentication issues**
 
 ### 🧠 Microsoft AI Features Working:
 - ✅ Official Microsoft deprecation patterns

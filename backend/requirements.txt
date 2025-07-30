@@ -8,9 +8,8 @@ httpx==0.27.2
 PyJWT==2.10.1
 openai==1.54.5
 
-# Azure SDK components for automated upgrade agents (optional - for enhanced automation)
-# Uncomment these lines for full automated upgrade capabilities:
-# azure-identity==1.16.0
-# azure-mgmt-resource==23.1.1
-# azure-mgmt-network==25.3.0
-# azure-mgmt-storage==21.1.0
+# Azure SDK components for automated upgrade agents - ENABLED for full automation
+azure-identity==1.17.1
+azure-mgmt-resource==23.1.1
+azure-mgmt-network==25.4.0
+azure-mgmt-storage==21.1.0
