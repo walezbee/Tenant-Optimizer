@@ -36,15 +36,17 @@ interface Subscription {
 }
 
 interface ScanResult {
-  resourceId: string;
-  resourceName: string;
-  resourceType: string;
+  id: string;  // API uses 'id' not 'resourceId'
+  name: string;  // API uses 'name' not 'resourceName'
+  type: string;  // API uses 'type' not 'resourceType'
   location: string;
   resourceGroup: string;
-  issue: string;
-  recommendation: string;
-  estimatedMonthlyCost?: string;
-  priority?: string;
+  subscriptionId: string;
+  priority: string;
+  cost_impact?: string;  // API uses 'cost_impact' not 'estimatedMonthlyCost'
+  analysis?: string;  // API uses 'analysis' not 'issue'
+  recommendation?: string;
+  upgrade_type?: string;  // For deprecated resources
   actions?: Array<{
     type: string;
     description: string;
@@ -364,7 +366,8 @@ function App() {
         return;
       }
       
-      setScanResults(prev => ({ ...prev, orphaned: data.orphaned || [] }));
+      console.log("📊 Orphaned scan response:", data);
+      setScanResults(prev => ({ ...prev, orphaned: data.resources || [] }));
     } catch (e: any) {
       setError(`Error scanning orphaned resources: ${e.message || e.toString()}`);
     } finally {
@@ -398,7 +401,8 @@ function App() {
         return;
       }
       
-      setScanResults(prev => ({ ...prev, deprecated: data.deprecated || [] }));
+      console.log("📊 Deprecated scan response:", data);
+      setScanResults(prev => ({ ...prev, deprecated: data.resources || [] }));
     } catch (e: any) {
       setError(`Error scanning deprecated resources: ${e.message || e.toString()}`);
     } finally {
@@ -434,7 +438,7 @@ function App() {
       // Remove the deleted resource from the scan results
       setScanResults(prev => ({
         ...prev,
-        orphaned: prev.orphaned?.filter(r => r.resourceId !== resourceId) || []
+        orphaned: prev.orphaned?.filter(r => r.id !== resourceId) || []
       }));
 
       alert(`Resource deletion initiated successfully!\n\nResource: ${resourceId}\nStatus: ${data.status}`);
@@ -495,7 +499,7 @@ function App() {
         alert(message);
         
         // Refresh scan results to show updated state
-        await handleScanDeprecated();
+        await scanDeprecatedResources();
         return;
       }
 
@@ -556,7 +560,7 @@ function App() {
         alert(message);
         
         // Refresh scan results to show updated state
-        await handleScanDeprecated();
+        await scanDeprecatedResources();
         return;
       }
 
@@ -714,11 +718,11 @@ function App() {
                       {scanResults.orphaned.map((resource, index) => (
                         <div key={index} className="result-item orphaned-item">
                           <div className="resource-info">
-                            <div className="resource-name">{resource.resourceName}</div>
-                            <div className="resource-type">{resource.resourceType}</div>
+                            <div className="resource-name">{resource.name}</div>
+                            <div className="resource-type">{resource.type}</div>
                             <div className="resource-location">{resource.location} • {resource.resourceGroup}</div>
-                            {resource.estimatedMonthlyCost && (
-                              <div className="resource-cost">💰 {resource.estimatedMonthlyCost}</div>
+                            {resource.cost_impact && (
+                              <div className="resource-cost">💰 {resource.cost_impact}</div>
                             )}
                             {resource.priority && (
                               <div className={`resource-priority priority-${resource.priority.toLowerCase()}`}>
@@ -727,7 +731,7 @@ function App() {
                             )}
                           </div>
                           <div className="resource-issue">
-                            <div className="issue">{resource.issue}</div>
+                            <div className="issue">{resource.analysis}</div>
                             <div className="recommendation">{resource.recommendation}</div>
                           </div>
                           {resource.actions && resource.actions.length > 0 && (
@@ -736,7 +740,7 @@ function App() {
                                 <button
                                   key={actionIndex}
                                   className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
-                                  onClick={() => action.type === 'delete' ? deleteResource(resource.resourceId) : console.log('Action not implemented')}
+                                  onClick={() => action.type === 'delete' ? deleteResource(resource.id) : console.log('Action not implemented')}
                                   disabled={loading}
                                   title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedSavings ? ', Saves: ' + action.estimatedSavings : ''})`}
                                 >
@@ -761,8 +765,8 @@ function App() {
                       {scanResults.deprecated.map((resource, index) => (
                         <div key={index} className="result-item deprecated-item">
                           <div className="resource-info">
-                            <div className="resource-name">{resource.resourceName}</div>
-                            <div className="resource-type">{resource.resourceType}</div>
+                            <div className="resource-name">{resource.name}</div>
+                            <div className="resource-type">{resource.type}</div>
                             <div className="resource-location">{resource.location} • {resource.resourceGroup}</div>
                             {resource.priority && (
                               <div className={`resource-priority priority-${resource.priority.toLowerCase()}`}>
@@ -776,7 +780,7 @@ function App() {
                             )}
                           </div>
                           <div className="resource-issue">
-                            <div className="issue">{resource.issue}</div>
+                            <div className="issue">{resource.analysis}</div>
                             <div className="recommendation">{resource.recommendation}</div>
                             {resource.estimatedMigrationTime && (
                               <div className="migration-time">⏱️ Est. Time: {resource.estimatedMigrationTime}</div>
@@ -788,7 +792,7 @@ function App() {
                                 <button
                                   key={actionIndex}
                                   className={`action-button action-${action.type} risk-${action.riskLevel.toLowerCase()}`}
-                                  onClick={() => action.type === 'upgrade' ? upgradeResource(resource.resourceId) : console.log('Action not implemented')}
+                                  onClick={() => action.type === 'upgrade' ? upgradeResource(resource.id) : console.log('Action not implemented')}
                                   disabled={loading}
                                   title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedTimeToComplete ? ', Time: ' + action.estimatedTimeToComplete : ''})`}
                                 >
