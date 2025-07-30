@@ -85,6 +85,7 @@ function App() {
   
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [bulkOperationLoading, setBulkOperationLoading] = useState<boolean>(false);
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState<boolean>(false);
 
   // Initialize MSAL on startup and handle redirects
   useEffect(() => {
@@ -151,6 +152,24 @@ function App() {
     }
     // eslint-disable-next-line
   }, [armToken]);
+
+  // Close profile dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (profileDropdownOpen && !target.closest('.profile-dropdown')) {
+        setProfileDropdownOpen(false);
+      }
+    };
+
+    if (profileDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [profileDropdownOpen]);
 
   const handleLogin = async () => {
     if (!msalReady) {
@@ -749,6 +768,24 @@ function App() {
     }
   };
 
+  const handleSignOut = async () => {
+    try {
+      await msalInstance.logoutRedirect({
+        account: account
+      });
+    } catch (error) {
+      console.error("Sign out error:", error);
+      // Fallback: clear local state
+      setAccount(null);
+      setApiToken(null);
+      setArmToken(null);
+      setSubscriptions([]);
+      setSelectedSubscriptions([]);
+      setScanResults({});
+      setError(null);
+    }
+  };
+
   return (
     <div className="App">
       <div className="app-container">
@@ -779,8 +816,31 @@ function App() {
         ) : (
           <div className="main-content">
             <div className="user-info">
-              <span className="user-avatar">👤</span>
-              <span className="user-name">Signed in as: {account.username}</span>
+              <div className="profile-dropdown">
+                <button 
+                  className="profile-btn"
+                  onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                >
+                  <span className="user-avatar">👤</span>
+                  <span className="user-name">{account.username}</span>
+                  <span className="dropdown-arrow">{profileDropdownOpen ? '▲' : '▼'}</span>
+                </button>
+                {profileDropdownOpen && (
+                  <div className="profile-dropdown-menu">
+                    <div className="profile-info">
+                      <div className="profile-name">{account.name}</div>
+                      <div className="profile-email">{account.username}</div>
+                    </div>
+                    <div className="profile-divider"></div>
+                    <button 
+                      className="profile-menu-item sign-out-btn"
+                      onClick={handleSignOut}
+                    >
+                      🚪 Sign Out
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="subscriptions-section">
@@ -893,7 +953,7 @@ function App() {
                         <div className="bulk-operations">
                           <div className="selection-controls">
                             <button
-                              onClick={() => selectAllResources('orphaned', scanResults.orphaned)}
+                              onClick={() => selectAllResources('orphaned', scanResults.orphaned || [])}
                               className="select-all-btn"
                               disabled={bulkOperationLoading}
                             >
@@ -993,7 +1053,7 @@ function App() {
                         <div className="bulk-operations">
                           <div className="selection-controls">
                             <button
-                              onClick={() => selectAllResources('deprecated', scanResults.deprecated)}
+                              onClick={() => selectAllResources('deprecated', scanResults.deprecated || [])}
                               className="select-all-btn"
                               disabled={bulkOperationLoading}
                             >

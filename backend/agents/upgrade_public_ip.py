@@ -173,9 +173,23 @@ class PublicIPUpgradeAgent:
                     attached_resource = ip_configuration.get("id")
                     
                     # Dissociate from the attached resource
-                    dissociation_result = await self._dissociate_public_ip_http(attached_resource, client, headers)
+                    dissociation_result = await self._dissociate_public_ip_http(attached_resource, url, client, headers)
                     if not dissociation_result["success"]:
                         return dissociation_result
+                    
+                    # Wait a moment for Azure to process the dissociation
+                    logger.info("⏳ Waiting for dissociation to complete...")
+                    import asyncio
+                    await asyncio.sleep(3)
+                    
+                    # Verify dissociation by checking Public IP status again
+                    verify_response = await client.get(url, headers=headers)
+                    if verify_response.status_code == 200:
+                        verify_config = verify_response.json()
+                        if verify_config.get("properties", {}).get("ipConfiguration"):
+                            logger.warning("⚠️ Dissociation may not be complete, proceeding anyway...")
+                        else:
+                            logger.info("✅ Dissociation verified successfully")
                 else:
                     logger.info("🔗 Step 2: Public IP is not attached to any resources")
                 
@@ -266,7 +280,7 @@ class PublicIPUpgradeAgent:
             "fallback_required": True
         }
     
-    async def _dissociate_public_ip_http(self, ip_config_id: str, client, headers) -> Dict[str, Any]:
+    async def _dissociate_public_ip_http(self, ip_config_id: str, public_ip_url: str, client, headers) -> Dict[str, Any]:
         """Dissociate Public IP from network interface using HTTP API."""
         try:
             # Extract network interface ID from IP configuration ID
@@ -302,7 +316,32 @@ class PublicIPUpgradeAgent:
             update_response = await client.put(nic_url, headers=headers, json=nic_config)
             
             if update_response.status_code in [200, 201, 202]:
-                logger.info("✅ Successfully dissociated Public IP from NIC")
+                logger.info("✅ Successfully updated NIC to remove Public IP reference")
+                
+                # Wait for the dissociation to propagate
+                logger.info("⏳ Waiting for dissociation to propagate...")
+                await asyncio.sleep(3)
+                
+                # Verify the Public IP is actually dissociated
+                max_retries = 5
+                for attempt in range(max_retries):
+                    verify_response = await client.get(public_ip_url, headers=headers)
+                    if verify_response.status_code == 200:
+                        public_ip_data = verify_response.json()
+                        ip_config_ref = public_ip_data.get("properties", {}).get("ipConfiguration")
+                        
+                        if not ip_config_ref:
+                            logger.info("✅ Verified: Public IP is fully dissociated")
+                            return {"success": True, "nic_config": nic_config}
+                        else:
+                            logger.info(f"⏳ Attempt {attempt + 1}: Public IP still shows association, waiting...")
+                            await asyncio.sleep(2)
+                    else:
+                        logger.warning(f"⚠️ Could not verify dissociation: {verify_response.status_code}")
+                        break
+                
+                # If we reach here, verification failed but we'll try to proceed
+                logger.warning("⚠️ Could not fully verify dissociation, but proceeding with upgrade...")
                 return {"success": True, "nic_config": nic_config}
             else:
                 return {
