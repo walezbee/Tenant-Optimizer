@@ -333,6 +333,111 @@ async def test_disk_query(user_info: Dict[str, Any] = Depends(verify_azure_token
             "message": f"Disk test failed: {str(e)}"
         }
 
+@app.get("/api/test/frontend-data")
+async def test_frontend_data():
+    """Test endpoint that returns sample data to verify frontend rendering."""
+    return {
+        "success": True,
+        "message": "Found 2 test resources",
+        "resources": [
+            {
+                "id": "/subscriptions/test/resourceGroups/test-rg/providers/Microsoft.Compute/disks/test-disk",
+                "name": "test-disk",
+                "type": "microsoft.compute/disks",
+                "resourceGroup": "test-rg",
+                "location": "westus2",
+                "subscriptionId": "test-subscription",
+                "priority": "High",
+                "cost_impact": "$5.00/month estimated",
+                "analysis": "Test orphaned disk for frontend verification"
+            },
+            {
+                "id": "/subscriptions/test/resourceGroups/test-rg/providers/Microsoft.Network/publicIPAddresses/test-ip",
+                "name": "test-ip",
+                "type": "microsoft.network/publicipaddresses",
+                "resourceGroup": "test-rg",
+                "location": "westus2",
+                "subscriptionId": "test-subscription",
+                "priority": "High",
+                "upgrade_type": "public_ip",
+                "analysis": "Test deprecated Basic SKU Public IP",
+                "recommendation": "Upgrade to Standard SKU"
+            }
+        ],
+        "total_resources": 2,
+        "scan_timestamp": datetime.now().isoformat(),
+        "subscriptions_scanned": "test"
+    }
+
+@app.get("/api/test/deprecated-query")
+async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure_token)):
+    """Test deprecated resources query with multiple approaches."""
+    try:
+        token = user_info['token']
+        
+        # Test 1: Basic query for all Public IPs and Load Balancers
+        query1 = """
+        Resources
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
+        | project id, name, resourceGroup, location, type, subscriptionId, properties
+        | limit 20
+        """
+        
+        # Test 2: More specific Basic SKU detection
+        query2 = """
+        Resources
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
+        | extend skuName = tostring(properties.sku.name)
+        | extend skuTier = tostring(properties.sku.tier)
+        | where skuName =~ "Basic" or skuTier =~ "Basic"
+        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, properties
+        | limit 20
+        """
+        
+        url = "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        results = {}
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            # Test query 1
+            response1 = await client.post(url, headers=headers, json={"query": query1})
+            if response1.status_code == 200:
+                result1 = response1.json()
+                data1 = result1.get("data", {})
+                rows1 = data1.get("rows", []) if isinstance(data1, dict) else []
+                results["all_network_resources"] = {
+                    "count": len(rows1),
+                    "sample": rows1[0] if rows1 else None
+                }
+            
+            # Test query 2
+            response2 = await client.post(url, headers=headers, json={"query": query2})
+            if response2.status_code == 200:
+                result2 = response2.json()
+                data2 = result2.get("data", {})
+                rows2 = data2.get("rows", []) if isinstance(data2, dict) else []
+                results["basic_sku_resources"] = {
+                    "count": len(rows2),
+                    "columns": [col.get("name") for col in data2.get("columns", [])] if isinstance(data2, dict) else [],
+                    "sample": rows2[0] if rows2 else None
+                }
+        
+        return {
+            "success": True,
+            "results": results,
+            "message": f"Found {results.get('all_network_resources', {}).get('count', 0)} total network resources, {results.get('basic_sku_resources', {}).get('count', 0)} with Basic SKU"
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Test failed: {str(e)}"
+        }
+
 @app.get("/api/test/upgrade-agents")
 def test_upgrade_agents():
     """Test endpoint to show system status."""
@@ -505,11 +610,13 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # Enhanced query for deprecated resources 
+        # Enhanced query for deprecated resources - more comprehensive detection
         query = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
-        | where properties.sku.name =~ "Basic" or properties.sku.tier =~ "Basic"
+        | where (properties.sku.name =~ "Basic") 
+           or (properties.sku.tier =~ "Basic")
+           or (tolower(tostring(properties.sku)) contains "basic")
         | project id, name, resourceGroup, location, type, subscriptionId, properties
         | limit 100
         """
