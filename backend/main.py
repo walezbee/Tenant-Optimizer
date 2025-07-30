@@ -375,22 +375,45 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
     try:
         token = user_info['token']
         
-        # Test 1: Basic query for all Public IPs and Load Balancers
+        # Test 1: Get ALL network and storage resources to see what exists
         query1 = """
         Resources
-        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
         | project id, name, resourceGroup, location, type, subscriptionId, properties
-        | limit 20
+        | limit 50
         """
         
-        # Test 2: More specific Basic SKU detection
+        # Test 2: Look for any SKU properties at all
         query2 = """
         Resources
         | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
+        | extend skuInfo = tostring(properties.sku)
         | extend skuName = tostring(properties.sku.name)
         | extend skuTier = tostring(properties.sku.tier)
-        | where skuName =~ "Basic" or skuTier =~ "Basic"
-        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, properties
+        | project id, name, type, skuInfo, skuName, skuTier, properties
+        | limit 20
+        """
+        
+        # Test 3: Specific Basic SKU search with case variations
+        query3 = """
+        Resources
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
+        | where tostring(properties.sku.name) =~ "Basic" 
+           or tostring(properties.sku.tier) =~ "Basic"
+           or tostring(properties.sku.name) == "Basic"
+           or tostring(properties.sku.tier) == "Basic"
+        | project id, name, type, properties
+        | limit 20
+        """
+        
+        # Test 4: Storage accounts with deprecated configurations
+        query4 = """
+        Resources
+        | where type == "microsoft.storage/storageaccounts"
+        | extend skuName = tostring(properties.sku.name)
+        | extend accessTier = tostring(properties.accessTier)
+        | extend kind = tostring(kind)
+        | project id, name, skuName, accessTier, kind, properties
         | limit 20
         """
         
@@ -403,33 +426,47 @@ async def test_deprecated_query(user_info: Dict[str, Any] = Depends(verify_azure
         results = {}
         
         async with httpx.AsyncClient(timeout=60) as client:
-            # Test query 1
-            response1 = await client.post(url, headers=headers, json={"query": query1})
-            if response1.status_code == 200:
-                result1 = response1.json()
-                data1 = result1.get("data", {})
-                rows1 = data1.get("rows", []) if isinstance(data1, dict) else []
-                results["all_network_resources"] = {
-                    "count": len(rows1),
-                    "sample": rows1[0] if rows1 else None
-                }
-            
-            # Test query 2
-            response2 = await client.post(url, headers=headers, json={"query": query2})
-            if response2.status_code == 200:
-                result2 = response2.json()
-                data2 = result2.get("data", {})
-                rows2 = data2.get("rows", []) if isinstance(data2, dict) else []
-                results["basic_sku_resources"] = {
-                    "count": len(rows2),
-                    "columns": [col.get("name") for col in data2.get("columns", [])] if isinstance(data2, dict) else [],
-                    "sample": rows2[0] if rows2 else None
-                }
+            # Test all queries
+            for i, query in enumerate([query1, query2, query3, query4], 1):
+                try:
+                    response = await client.post(url, headers=headers, json={"query": query})
+                    if response.status_code == 200:
+                        result = response.json()
+                        data = result.get("data", {})
+                        
+                        if isinstance(data, dict):
+                            rows = data.get("rows", [])
+                            columns = data.get("columns", [])
+                            column_names = [col.get("name") for col in columns] if columns else []
+                            
+                            results[f"test_{i}"] = {
+                                "query_description": [
+                                    "All network/storage resources",
+                                    "SKU property analysis", 
+                                    "Basic SKU specific search",
+                                    "Storage account analysis"
+                                ][i-1],
+                                "count": len(rows),
+                                "columns": column_names,
+                                "sample_data": rows[:3] if rows else [],
+                                "success": True
+                            }
+                        else:
+                            results[f"test_{i}"] = {"success": False, "error": "Unexpected data format"}
+                    else:
+                        results[f"test_{i}"] = {"success": False, "error": f"Status {response.status_code}: {response.text}"}
+                except Exception as e:
+                    results[f"test_{i}"] = {"success": False, "error": str(e)}
         
         return {
             "success": True,
             "results": results,
-            "message": f"Found {results.get('all_network_resources', {}).get('count', 0)} total network resources, {results.get('basic_sku_resources', {}).get('count', 0)} with Basic SKU"
+            "summary": {
+                "total_network_storage": results.get("test_1", {}).get("count", 0),
+                "sku_analysis": results.get("test_2", {}).get("count", 0),
+                "basic_sku_found": results.get("test_3", {}).get("count", 0),
+                "storage_accounts": results.get("test_4", {}).get("count", 0)
+            }
         }
         
     except Exception as e:
@@ -610,14 +647,29 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # Enhanced query for deprecated resources - more comprehensive detection
+        # More comprehensive query for deprecated resources - cast all possible formats
         query = """
         Resources
-        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers")
-        | where (properties.sku.name =~ "Basic") 
-           or (properties.sku.tier =~ "Basic")
-           or (tolower(tostring(properties.sku)) contains "basic")
-        | project id, name, resourceGroup, location, type, subscriptionId, properties
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+        | extend skuName = case(
+            isnotnull(properties.sku.name), tostring(properties.sku.name),
+            isnotnull(properties.sku), tostring(properties.sku),
+            ""
+        )
+        | extend skuTier = case(
+            isnotnull(properties.sku.tier), tostring(properties.sku.tier),
+            ""
+        )
+        | extend accessTier = case(
+            isnotnull(properties.accessTier), tostring(properties.accessTier),
+            ""
+        )
+        | where skuName =~ "Basic" 
+           or skuTier =~ "Basic"
+           or skuName =~ "Standard_LRS"
+           or skuName contains "Basic"
+           or accessTier =~ "Archive"
+        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, properties
         | limit 100
         """
         
@@ -677,15 +729,30 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                 formatted_resources = []
                 for resource in resources:
                     resource_type = resource.get("type", "")
+                    sku_name = resource.get("skuName", "")
+                    sku_tier = resource.get("skuTier", "")
+                    access_tier = resource.get("accessTier", "")
+                    
                     if "publicipaddresses" in resource_type:
                         upgrade_type = "public_ip"
-                        description = "Basic SKU Public IP (deprecated)"
+                        description = f"Basic SKU Public IP (deprecated) - SKU: {sku_name}/{sku_tier}"
+                        recommendation = "Upgrade to Standard SKU Public IP for better performance and availability"
                     elif "loadbalancers" in resource_type:
                         upgrade_type = "load_balancer"
-                        description = "Basic SKU Load Balancer (deprecated)"
+                        description = f"Basic SKU Load Balancer (deprecated) - SKU: {sku_name}/{sku_tier}"
+                        recommendation = "Upgrade to Standard SKU Load Balancer for improved features"
+                    elif "storageaccounts" in resource_type:
+                        upgrade_type = "storage_account"
+                        if access_tier == "Archive":
+                            description = f"Archive tier storage account - consider lifecycle management"
+                            recommendation = "Review access patterns and consider Hot/Cool tiers for frequently accessed data"
+                        else:
+                            description = f"Storage account with deprecated configuration - SKU: {sku_name}"
+                            recommendation = "Review storage account configuration for optimization opportunities"
                     else:
                         upgrade_type = "unknown"
-                        description = "Deprecated configuration"
+                        description = f"Deprecated configuration detected - SKU: {sku_name}"
+                        recommendation = "Review resource configuration and upgrade if needed"
                     
                     formatted_resources.append({
                         "id": resource.get("id", ""),
@@ -697,7 +764,16 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                         "priority": "High",
                         "upgrade_type": upgrade_type,
                         "analysis": description,
-                        "recommendation": "Upgrade to Standard SKU for better performance"
+                        "recommendation": recommendation,
+                        "actions": [
+                            {
+                                "type": "upgrade",
+                                "description": f"Upgrade {upgrade_type.replace('_', ' ').title()}",
+                                "riskLevel": "Medium",
+                                "confirmationRequired": True,
+                                "estimatedTimeToComplete": "10-30 minutes"
+                            }
+                        ]
                     })
                 
                 return {
