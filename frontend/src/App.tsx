@@ -1123,7 +1123,9 @@ function App() {
                                   disabled={loading || bulkOperationLoading}
                                   title={`${action.description} (Risk: ${action.riskLevel}${action.estimatedTimeToComplete ? ', Time: ' + action.estimatedTimeToComplete : ''})`}
                                 >
-                                  {action.type === 'upgrade' ? '⬆️ Upgrade' : '⚡ ' + action.type}
+                                  <span className="action-label">
+                                    {action.type === 'upgrade' ? '⬆️ Upgrade' : '⚡ ' + action.type}
+                                  </span>
                                   {action.estimatedTimeToComplete && (
                                     <span className="action-time">⏱️ {action.estimatedTimeToComplete}</span>
                                   )}

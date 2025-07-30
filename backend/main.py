@@ -937,7 +937,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     
                     # Use Microsoft Knowledge Base for enhanced formatting
                     if 'microsoft_recommendation' in resource:
-                        description = f"Microsoft AI: {resource.get('deprecation_reason', 'Deprecated resource detected')}"
+                        description = resource.get('deprecation_reason', 'Deprecated resource detected')
                         recommendation = resource.get('microsoft_recommendation', 'Upgrade recommended')
                         upgrade_type = "microsoft_validated"
                     else:

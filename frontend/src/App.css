@@ -593,8 +593,10 @@ body {
 
 .action-button {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: center;
+  gap: 0.25rem;
   padding: 0.75rem 1.25rem;
   border: none;
   border-radius: 8px;
@@ -604,6 +606,7 @@ body {
   transition: all 0.3s ease;
   text-decoration: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  min-height: 60px;
 }
 
 .action-button:hover:not(:disabled) {
@@ -669,9 +672,17 @@ body {
 }
 
 .action-time {
-  font-size: 0.8rem;
-  opacity: 0.9;
-  margin-left: 0.25rem;
+  font-size: 0.7rem;
+  opacity: 0.8;
+  display: block;
+  text-align: center;
+  line-height: 1;
+  margin-top: -2px;
+}
+
+.action-label {
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 /* Enhanced Result Items */
