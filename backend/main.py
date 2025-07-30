@@ -716,9 +716,34 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
         # Extract subscriptions from payload
         subscriptions = payload.get("subscriptions", [])
         
-        # Use Microsoft Knowledge Base optimized query
-        kql_queries = microsoft_kb.get_kql_queries()
-        query = kql_queries["deprecated_comprehensive"]
+        # Use a working query for deprecated resources detection
+        query = """
+        Resources
+        | where type in ("microsoft.network/publicipaddresses", "microsoft.network/loadbalancers", "microsoft.storage/storageaccounts")
+        | extend skuName = case(
+            isnotnull(properties.sku.name), tostring(properties.sku.name),
+            isnotnull(properties.sku), tostring(properties.sku),
+            isnotnull(sku.name), tostring(sku.name),
+            isnotnull(sku), tostring(sku),
+            ""
+        )
+        | extend skuTier = case(
+            isnotnull(properties.sku.tier), tostring(properties.sku.tier),
+            isnotnull(sku.tier), tostring(sku.tier),
+            ""
+        )
+        | extend accessTier = case(
+            isnotnull(properties.accessTier), tostring(properties.accessTier),
+            ""
+        )
+        | where skuName =~ "Basic" 
+           or skuTier =~ "Basic"
+           or skuName =~ "Standard_LRS"
+           or skuName =~ "Standard_GRS"
+           or accessTier =~ "Archive"
+        | project id, name, resourceGroup, location, type, subscriptionId, skuName, skuTier, accessTier, properties
+        | limit 100
+        """
         
         logger.info(f"🧠 Using Microsoft-trained AI query for deprecated resources detection")
         
@@ -862,7 +887,7 @@ async def scan_deprecated_resources(payload: dict, user_info: Dict[str, Any] = D
                     access_tier = resource.get("accessTier", "")
                     
                     # Use Microsoft Knowledge Base for enhanced formatting
-                    if hasattr(resource, 'microsoft_recommendation'):
+                    if 'microsoft_recommendation' in resource:
                         description = f"Microsoft AI: {resource.get('deprecation_reason', 'Deprecated resource detected')}"
                         recommendation = resource.get('microsoft_recommendation', 'Upgrade recommended')
                         upgrade_type = "microsoft_validated"

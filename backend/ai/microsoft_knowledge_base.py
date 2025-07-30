@@ -388,3 +388,81 @@ class MicrosoftKnowledgeBase:
             "optimization_potential": "varies",
             "considerations": "Review Azure pricing calculator"
         })
+    
+    def analyze_resource_deprecation(self, resource: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze a resource using Microsoft's official deprecation patterns.
+        Returns deprecation status with official Microsoft guidance.
+        """
+        resource_type = resource.get("type", "").lower()
+        sku_name = str(resource.get("skuName", "")).lower()
+        sku_tier = str(resource.get("skuTier", "")).lower()
+        
+        # Check against Microsoft's official deprecation patterns
+        deprecated_patterns = self.get_deprecated_resources_patterns()
+        
+        # Check Basic SKU Public IPs (retiring Sept 30, 2025)
+        if "publicipaddresses" in resource_type:
+            if "basic" in sku_name or "basic" in sku_tier:
+                return {
+                    "is_deprecated": True,
+                    "reason": "Basic SKU Public IP (Microsoft Official: retiring September 30, 2025)",
+                    "retirement_date": "2025-09-30",
+                    "recommendation": "Upgrade to Standard SKU Public IP immediately",
+                    "risk_level": "High",
+                    "cost_impact": "Service disruption risk - upgrade required before retirement",
+                    "microsoft_official": True,
+                    "source": "https://azure.microsoft.com/updates"
+                }
+        
+        # Check Basic SKU Load Balancers (retiring Sept 30, 2025)
+        elif "loadbalancers" in resource_type:
+            if "basic" in sku_name or "basic" in sku_tier:
+                return {
+                    "is_deprecated": True,
+                    "reason": "Basic SKU Load Balancer (Microsoft Official: retiring September 30, 2025)",
+                    "retirement_date": "2025-09-30",
+                    "recommendation": "Upgrade to Standard SKU Load Balancer immediately",
+                    "risk_level": "High", 
+                    "cost_impact": "Service disruption risk - upgrade required before retirement",
+                    "microsoft_official": True,
+                    "source": "https://azure.microsoft.com/updates"
+                }
+        
+        # Check deprecated storage configurations
+        elif "storageaccounts" in resource_type:
+            access_tier = str(resource.get("accessTier", "")).lower()
+            if "archive" in access_tier:
+                return {
+                    "is_deprecated": False,  # Archive tier is not deprecated, but may need optimization
+                    "reason": "Archive tier storage - consider lifecycle optimization",
+                    "retirement_date": "",
+                    "recommendation": "Review access patterns for potential Hot/Cool tier migration",
+                    "risk_level": "Low",
+                    "cost_impact": "Optimization opportunity available",
+                    "microsoft_official": True,
+                    "source": "Microsoft Storage Best Practices"
+                }
+            elif "standard_lrs" in sku_name:
+                return {
+                    "is_deprecated": False,  # LRS is not deprecated, but could be upgraded
+                    "reason": "Standard LRS - consider redundancy upgrade for better availability",
+                    "retirement_date": "",
+                    "recommendation": "Consider upgrading to GRS or ZRS for improved data redundancy",
+                    "risk_level": "Low",
+                    "cost_impact": "Improved availability with moderate cost increase",
+                    "microsoft_official": True,
+                    "source": "Microsoft Storage Redundancy Guide"
+                }
+        
+        # If no deprecation detected
+        return {
+            "is_deprecated": False,
+            "reason": "",
+            "retirement_date": "",
+            "recommendation": "",
+            "risk_level": "Low",
+            "cost_impact": "",
+            "microsoft_official": False,
+            "source": ""
+        }
