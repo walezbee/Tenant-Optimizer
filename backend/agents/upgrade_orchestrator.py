@@ -60,22 +60,30 @@ class AutomatedUpgradeOrchestrator:
     Coordinates multiple specialized agents for different resource types.
     """
     
-    def __init__(self, subscription_id: str):
+    def __init__(self, subscription_id: str, access_token: str = None, tenant_id: str = None):
         """Initialize the orchestrator."""
         self.subscription_id = subscription_id
+        self.access_token = access_token
+        self.tenant_id = tenant_id
         
-        # Try to initialize Azure SDK if available
-        try:
-            if AZURE_SDK_AVAILABLE:
-                self.credential = DefaultAzureCredential()
-                self.resource_client = ResourceManagementClient(self.credential, subscription_id)
-                logger.info("🔑 Orchestrator using DefaultAzureCredential for authentication")
-            else:
-                raise Exception("Azure SDK not available")
-        except Exception as e:
-            logger.warning(f"⚠️ Azure SDK authentication failed: {e}")
+        # If we have access token, use it for HTTP calls (preferred)
+        if access_token and HTTPX_AVAILABLE:
             self.credential = None
             self.resource_client = None
+            logger.info("🔑 Orchestrator using user access token for authentication")
+        else:
+            # Try Azure SDK as fallback
+            try:
+                if AZURE_SDK_AVAILABLE:
+                    self.credential = DefaultAzureCredential()
+                    self.resource_client = ResourceManagementClient(self.credential, subscription_id)
+                    logger.info("🔑 Orchestrator using DefaultAzureCredential for authentication")
+                else:
+                    raise Exception("Azure SDK not available")
+            except Exception as e:
+                logger.warning(f"⚠️ Azure SDK authentication failed: {e}")
+                self.credential = None
+                self.resource_client = None
         
         # Track available agents
         self.agents = {
@@ -311,21 +319,36 @@ class AutomatedUpgradeOrchestrator:
             # Call the appropriate upgrade function
             if resource_type == 'Microsoft.Network/publicIPAddresses':
                 if hasattr(agent_module, 'upgrade_public_ip_automated'):
-                    return await agent_module.upgrade_public_ip_automated(
-                        self.subscription_id, resource_id
-                    )
+                    if self.access_token:
+                        return await agent_module.upgrade_public_ip_automated(
+                            self.subscription_id, resource_id, self.access_token, self.tenant_id
+                        )
+                    else:
+                        return await agent_module.upgrade_public_ip_automated(
+                            self.subscription_id, resource_id
+                        )
                     
             elif resource_type == 'Microsoft.Network/loadBalancers':
                 if hasattr(agent_module, 'upgrade_load_balancer_automated'):
-                    return await agent_module.upgrade_load_balancer_automated(
-                        self.subscription_id, resource_id
-                    )
+                    if self.access_token:
+                        return await agent_module.upgrade_load_balancer_automated(
+                            self.subscription_id, resource_id, self.access_token, self.tenant_id
+                        )
+                    else:
+                        return await agent_module.upgrade_load_balancer_automated(
+                            self.subscription_id, resource_id
+                        )
                     
             elif resource_type == 'Microsoft.Storage/storageAccounts':
                 if hasattr(agent_module, 'upgrade_storage_account_automated'):
-                    return await agent_module.upgrade_storage_account_automated(
-                        self.subscription_id, resource_id
-                    )
+                    if self.access_token:
+                        return await agent_module.upgrade_storage_account_automated(
+                            self.subscription_id, resource_id, self.access_token, self.tenant_id
+                        )
+                    else:
+                        return await agent_module.upgrade_storage_account_automated(
+                            self.subscription_id, resource_id
+                        )
             
             return {
                 "success": False,

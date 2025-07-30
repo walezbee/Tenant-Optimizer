@@ -1101,8 +1101,16 @@ async def upgrade_resource(payload: dict, user_info: Dict[str, Any] = Depends(ve
             
             logger.info(f"🔧 Initializing orchestrator with subscription: {subscription_id}")
             
-            # Initialize orchestrator with subscription ID
-            orchestrator = AutomatedUpgradeOrchestrator(subscription_id=subscription_id)
+            # Get user's access token for Azure API calls
+            access_token = user_info['token']
+            tenant_id = user_info.get('decoded', {}).get('tid', '')
+            
+            # Initialize orchestrator with user's credentials
+            orchestrator = AutomatedUpgradeOrchestrator(
+                subscription_id=subscription_id,
+                access_token=access_token,
+                tenant_id=tenant_id
+            )
             
             logger.info(f"🔧 Orchestrator initialized, calling upgrade for: {resource_id}")
             

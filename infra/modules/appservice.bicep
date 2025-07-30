@@ -35,16 +35,5 @@ resource webapp 'Microsoft.Web/sites@2022-03-01' = {
   }
 }
 
-// Grant the App Service Managed Identity permissions to manage Azure resources
-resource contributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(webapp.id, 'b24988ac-6180-42a0-ab88-20f7382dd24c', resourceGroup().id)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c') // Contributor role
-    principalId: webapp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 output webAppName string = webapp.name
 output managedIdentityPrincipalId string = webapp.identity.principalId
