@@ -72,6 +72,22 @@ function App() {
     orphaned?: ScanResult[];
     deprecated?: ScanResult[];
   }>({});
+  const [costSavings, setCostSavings] = useState<{
+    orphaned?: {
+      total_monthly_savings: string;
+      total_annual_savings: string;
+      resource_count: number;
+      summary: string;
+      breakdown_by_type?: any;
+    };
+    deprecated?: {
+      total_monthly_savings: string;
+      total_annual_savings: string;
+      resource_count: number;
+      summary: string;
+      breakdown_by_type?: any;
+    };
+  }>({});
   const [scanLoading, setScanLoading] = useState<{
     orphaned: boolean;
     deprecated: boolean;
@@ -396,6 +412,11 @@ function App() {
       
       console.log("📊 Orphaned scan response:", data);
       setScanResults(prev => ({ ...prev, orphaned: data.resources || [] }));
+      
+      // Set cost savings if available
+      if (data.cost_savings) {
+        setCostSavings(prev => ({ ...prev, orphaned: data.cost_savings }));
+      }
     } catch (e: any) {
       setError(`Error scanning orphaned resources: ${e.message || e.toString()}`);
     } finally {
@@ -946,6 +967,19 @@ function App() {
                         {searchTerm && scanResults.orphaned.length !== filterResources(scanResults.orphaned, searchTerm).length && 
                           ` of ${scanResults.orphaned.length}`})
                       </h3>
+                      
+                      {/* Cost Savings Summary for Orphaned Resources */}
+                      {costSavings.orphaned && (
+                        <div className="cost-savings-summary">
+                          <div className="savings-highlight">
+                            💰 <strong>Potential Savings: {costSavings.orphaned.total_monthly_savings}</strong>
+                          </div>
+                          <div className="savings-details">
+                            <span className="savings-annual">({costSavings.orphaned.total_annual_savings} annually)</span>
+                            <span className="savings-summary">{costSavings.orphaned.summary}</span>
+                          </div>
+                        </div>
+                      )}
                       
                       {/* Bulk Operations for Orphaned Resources */}
                       {filterResources(scanResults.orphaned, searchTerm).length > 0 && (

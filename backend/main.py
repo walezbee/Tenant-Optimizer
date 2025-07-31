@@ -627,6 +627,89 @@ def test_upgrade_agents():
             "timestamp": datetime.now().isoformat()
         }
 
+def calculate_total_cost_savings(resources):
+    """
+    Calculate total potential cost savings from orphaned resources.
+    
+    Args:
+        resources: List of orphaned resources with cost_impact or estimatedSavings
+        
+    Returns:
+        dict: Summary of cost savings with total, breakdown, and count
+    """
+    total_min_savings = 0.0
+    total_max_savings = 0.0
+    resource_count = 0
+    resource_breakdown = {}
+    
+    for resource in resources:
+        resource_type = resource.get("type", "").split("/")[-1] if resource.get("type") else "unknown"
+        
+        # Get cost impact from the resource
+        cost_impact = resource.get("cost_impact", "")
+        estimated_savings = ""
+        
+        # Check if resource has actions with estimatedSavings
+        actions = resource.get("actions", [])
+        for action in actions:
+            if action.get("estimatedSavings"):
+                estimated_savings = action["estimatedSavings"]
+                break
+        
+        # Use either cost_impact or estimatedSavings
+        cost_string = estimated_savings or cost_impact
+        
+        if cost_string and "$" in cost_string:
+            # Extract numerical values from cost strings like "$4-50/month" or "$5.00/month"
+            import re
+            
+            # Pattern to match numbers in cost strings
+            numbers = re.findall(r'\$?(\d+(?:\.\d{2})?)', cost_string)
+            
+            if numbers:
+                try:
+                    if "-" in cost_string and len(numbers) >= 2:
+                        # Range format like "$4-50/month"
+                        min_cost = float(numbers[0])
+                        max_cost = float(numbers[1])
+                    else:
+                        # Single value like "$5.00/month"
+                        min_cost = max_cost = float(numbers[0])
+                    
+                    total_min_savings += min_cost
+                    total_max_savings += max_cost
+                    resource_count += 1
+                    
+                    # Track by resource type
+                    if resource_type not in resource_breakdown:
+                        resource_breakdown[resource_type] = {
+                            "count": 0,
+                            "min_savings": 0.0,
+                            "max_savings": 0.0
+                        }
+                    
+                    resource_breakdown[resource_type]["count"] += 1
+                    resource_breakdown[resource_type]["min_savings"] += min_cost
+                    resource_breakdown[resource_type]["max_savings"] += max_cost
+                    
+                except (ValueError, IndexError):
+                    # Skip resources with unparseable cost data
+                    continue
+    
+    # Format the response
+    if total_min_savings == total_max_savings:
+        total_savings_text = f"${total_max_savings:.2f}/month"
+    else:
+        total_savings_text = f"${total_min_savings:.2f}-${total_max_savings:.2f}/month"
+    
+    return {
+        "total_monthly_savings": total_savings_text,
+        "total_annual_savings": f"${total_min_savings * 12:.2f}-${total_max_savings * 12:.2f}/year" if total_min_savings != total_max_savings else f"${total_max_savings * 12:.2f}/year",
+        "resource_count": resource_count,
+        "breakdown_by_type": resource_breakdown,
+        "summary": f"Deleting {resource_count} orphaned resources could save {total_savings_text}"
+    }
+
 @app.post("/api/scan/orphaned")
 async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Depends(verify_azure_token)):
     """Scan for orphaned Azure resources."""
@@ -730,11 +813,15 @@ async def scan_orphaned_resources(payload: dict, user_info: Dict[str, Any] = Dep
                         "analysis": f"Orphaned disk ({disk_size}GB) - not attached to any VM" if disk_size > 0 else "Orphaned disk - not attached to any VM"
                     })
                 
+                # Calculate total cost savings for all orphaned resources
+                cost_savings = calculate_total_cost_savings(formatted_resources)
+                
                 return {
                     "success": True,
                     "message": f"Found {len(formatted_resources)} orphaned resources",
                     "resources": formatted_resources,
                     "total_resources": len(formatted_resources),
+                    "cost_savings": cost_savings,
                     "scan_timestamp": datetime.now().isoformat(),
                     "subscriptions_scanned": len(subscriptions) if subscriptions else "all"
                 }

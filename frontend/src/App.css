@@ -403,6 +403,79 @@ body {
   gap: 0.5rem;
 }
 
+/* Cost Savings Summary */
+.cost-savings-summary {
+  background: linear-gradient(135deg, #10b981, #065f46);
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  margin: 1rem 0;
+  color: white;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+}
+
+.savings-highlight {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.savings-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.savings-annual {
+  opacity: 0.9;
+  font-weight: 600;
+}
+
+.savings-summary {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.cost-savings-summary {
+  background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%);
+  border: 2px solid #10b981;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin: 0.75rem 0 1.5rem 0;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
+}
+
+.savings-highlight {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #065f46;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.savings-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.savings-annual {
+  font-size: 0.9rem;
+  color: #047857;
+  font-weight: 600;
+}
+
+.savings-summary {
+  font-size: 0.85rem;
+  color: #064e3b;
+  opacity: 0.9;
+}
+
 .result-list {
   display: flex;
   flex-direction: column;
